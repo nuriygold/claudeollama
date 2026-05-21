@@ -4,3 +4,4 @@ config/*.secret.*
 .env.*
 *.log
 .DS_Store
+.claude/claudelitellmmcps.json

@@ -28,12 +28,30 @@ require_command python3
 require_command curl
 require_command lsof
 
+HOME_CLAUDE_CONFIG_DIR="$HOME/.claude"
+REPO_CLAUDE_CONFIG_DIR="$REPO_ROOT/.claude"
 REAL_LITELLM_URL="${REAL_LITELLM_URL:-http://127.0.0.1:4000}"
 FILTER_PORT="${FILTER_PORT:-4001}"
 FILTER_URL="http://127.0.0.1:${FILTER_PORT}"
 MODEL="${ANTHROPIC_MODEL:-gpt-5.4}"
-CLAUDE_CONFIG_DIR="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
-MCP_CONFIG_PATH="${MCP_CONFIG_PATH:-$CLAUDE_CONFIG_DIR/claudelitellmmcps.json}"
+
+if [[ -n "${CLAUDE_CONFIG_DIR:-}" ]]; then
+  CLAUDE_CONFIG_DIR="$CLAUDE_CONFIG_DIR"
+elif [[ -d "$REPO_CLAUDE_CONFIG_DIR" ]]; then
+  CLAUDE_CONFIG_DIR="$REPO_CLAUDE_CONFIG_DIR"
+else
+  CLAUDE_CONFIG_DIR="$HOME_CLAUDE_CONFIG_DIR"
+fi
+
+if [[ -n "${MCP_CONFIG_PATH:-}" ]]; then
+  MCP_CONFIG_PATH="$MCP_CONFIG_PATH"
+else
+  MCP_CONFIG_PATH="$CLAUDE_CONFIG_DIR/claudelitellmmcps.json"
+  if [[ ! -f "$MCP_CONFIG_PATH" && -f "$HOME_CLAUDE_CONFIG_DIR/claudelitellmmcps.json" ]]; then
+    MCP_CONFIG_PATH="$HOME_CLAUDE_CONFIG_DIR/claudelitellmmcps.json"
+  fi
+fi
+
 FILTER_SCRIPT_PATH="${FILTER_SCRIPT_PATH:-${TMPDIR:-/tmp}/litellm_strip_output_config_proxy.py}"
 FILTER_LOG_PATH="${FILTER_LOG_PATH:-${TMPDIR:-/tmp}/litellm-filter.log}"
 LITELLM_MODELS_OUTPUT="${LITELLM_MODELS_OUTPUT:-${TMPDIR:-/tmp}/litellm_models.json}"

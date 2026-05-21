@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd -- "$SCRIPT_DIR/.." && pwd)"
+REPO_CLAUDE_DIR="$REPO_ROOT/.claude"
+HOME_MCP_CONFIG="$HOME/.claude/claudelitellmmcps.json"
+REPO_MCP_CONFIG="$REPO_CLAUDE_DIR/claudelitellmmcps.json"
+EXAMPLE_MCP_CONFIG="$REPO_CLAUDE_DIR/claudelitellmmcps.json.example"
+
+mkdir -p "$REPO_CLAUDE_DIR"
+
+if [[ -f "$HOME_MCP_CONFIG" ]]; then
+  cp "$HOME_MCP_CONFIG" "$REPO_MCP_CONFIG"
+  echo "Copied your real MCP config into $REPO_MCP_CONFIG"
+  echo "This file stays local because .gitignore excludes it."
+  exit 0
+fi
+
+if [[ -f "$EXAMPLE_MCP_CONFIG" ]]; then
+  cp "$EXAMPLE_MCP_CONFIG" "$REPO_MCP_CONFIG"
+  echo "No home MCP config found. Seeded $REPO_MCP_CONFIG from the repo example."
+  echo "Edit it locally with your own auth before relying on those MCP servers."
+  exit 0
+fi
+
+echo "ERROR: No source MCP config found."
+exit 1
