@@ -114,7 +114,9 @@ When editing this repo, preserve these invariants unless the task explicitly cha
 - The filter proxy must continue stripping `output_config` from JSON request bodies.
 - Claude should continue launching in a temporary clean `HOME`.
 - The launcher should fail fast when LiteLLM or the filter proxy is unreachable.
-- Follow repository operator rules from `AGENTS.md`: no em dashes in docs or messages, use fresh branches for testing or deployment-oriented work, and prefer internet-backed verification over stale local assumptions when validating changes.
+- No em dashes in docs or messages for this repo.
+- Prefer internet-backed verification over stale local assumptions when validating changes.
+- For Codex-created testing or deployment branches in this repo, use the `joy/` prefix. This prefix preference is for Codex work only, not for other CLIs or tools.
 
 ## Verification
 
