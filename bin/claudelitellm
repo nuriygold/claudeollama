@@ -1,0 +1,195 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd -- "$SCRIPT_DIR/.." && pwd)"
+
+REAL_LITELLM_URL="${REAL_LITELLM_URL:-http://127.0.0.1:4000}"
+FILTER_PORT="${FILTER_PORT:-4001}"
+FILTER_URL="http://127.0.0.1:${FILTER_PORT}"
+MODEL="${ANTHROPIC_MODEL:-gpt-5.4}"
+CLAUDE_CONFIG_DIR="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
+MCP_CONFIG_PATH="${MCP_CONFIG_PATH:-$CLAUDE_CONFIG_DIR/claudelitellmmcps.json}"
+FILTER_SCRIPT_PATH="${FILTER_SCRIPT_PATH:-${TMPDIR:-/tmp}/litellm_strip_output_config_proxy.py}"
+FILTER_LOG_PATH="${FILTER_LOG_PATH:-${TMPDIR:-/tmp}/litellm-filter.log}"
+LITELLM_MODELS_OUTPUT="${LITELLM_MODELS_OUTPUT:-${TMPDIR:-/tmp}/litellm_models.json}"
+FILTER_MODELS_OUTPUT="${FILTER_MODELS_OUTPUT:-${TMPDIR:-/tmp}/litellm_filter_models.json}"
+
+echo "=== Claude Code → filter proxy → existing LiteLLM → Azure ${MODEL} ==="
+echo "Real LiteLLM: $REAL_LITELLM_URL"
+echo "Filter URL:   $FILTER_URL"
+echo "Model:        $MODEL"
+echo
+
+echo "Checking existing LiteLLM..."
+HTTP_CODE="$(curl -sS -o "$LITELLM_MODELS_OUTPUT" -w "%{http_code}" "$REAL_LITELLM_URL/v1/models" || true)"
+
+if [[ "$HTTP_CODE" == "401" || "$HTTP_CODE" == "403" ]]; then
+  echo "LiteLLM requires a key."
+  read -r -s -p "Paste your LiteLLM key: " LITELLM_KEY
+  echo
+  HTTP_CODE="$(curl -sS -o "$LITELLM_MODELS_OUTPUT" -w "%{http_code}" \
+    -H "Authorization: Bearer $LITELLM_KEY" \
+    "$REAL_LITELLM_URL/v1/models" || true)"
+else
+  LITELLM_KEY="${LITELLM_KEY:-sk-litellm-local}"
+fi
+
+if [[ "$HTTP_CODE" != "200" ]]; then
+  echo "ERROR: Existing LiteLLM is not reachable or did not accept auth."
+  echo "HTTP status: $HTTP_CODE"
+  echo "Expected: $REAL_LITELLM_URL/v1/models"
+  exit 1
+fi
+
+echo
+echo "Confirmed LiteLLM is reachable."
+echo
+
+echo "Stopping any old filter proxy on port ${FILTER_PORT}..."
+lsof -tiTCP:"$FILTER_PORT" -sTCP:LISTEN | xargs -r kill 2>/dev/null || true
+
+cat > "$FILTER_SCRIPT_PATH" <<'PY'
+import http.server
+import socketserver
+import urllib.request
+import urllib.error
+import json
+import os
+import sys
+
+TARGET = os.environ.get("REAL_LITELLM_URL", "http://127.0.0.1:4000").rstrip("/")
+PORT = int(os.environ.get("FILTER_PORT", "4001"))
+
+DROP_KEYS = {
+    "output_config",
+}
+
+def strip_keys(obj):
+    if isinstance(obj, dict):
+        return {k: strip_keys(v) for k, v in obj.items() if k not in DROP_KEYS}
+    if isinstance(obj, list):
+        return [strip_keys(x) for x in obj]
+    return obj
+
+class Handler(http.server.BaseHTTPRequestHandler):
+    protocol_version = "HTTP/1.1"
+
+    def do_GET(self):
+        self.forward()
+
+    def do_POST(self):
+        self.forward()
+
+    def do_OPTIONS(self):
+        self.forward()
+
+    def forward(self):
+        length = int(self.headers.get("content-length", "0") or "0")
+        body = self.rfile.read(length) if length else b""
+
+        if body and self.headers.get("content-type", "").startswith("application/json"):
+            try:
+                data = json.loads(body.decode("utf-8"))
+                data = strip_keys(data)
+                body = json.dumps(data).encode("utf-8")
+            except Exception:
+                pass
+
+        url = TARGET + self.path
+
+        headers = {}
+        for k, v in self.headers.items():
+            lk = k.lower()
+            if lk in {"host", "content-length", "connection", "accept-encoding"}:
+                continue
+            headers[k] = v
+
+        headers["Content-Length"] = str(len(body))
+
+        req = urllib.request.Request(
+            url,
+            data=body if self.command not in {"GET", "HEAD"} else None,
+            headers=headers,
+            method=self.command,
+        )
+
+        try:
+            with urllib.request.urlopen(req, timeout=600) as resp:
+                payload = resp.read()
+                self.send_response(resp.status)
+                for k, v in resp.headers.items():
+                    lk = k.lower()
+                    if lk in {"transfer-encoding", "connection", "content-encoding"}:
+                        continue
+                    self.send_header(k, v)
+                self.send_header("Content-Length", str(len(payload)))
+                self.end_headers()
+                self.wfile.write(payload)
+        except urllib.error.HTTPError as e:
+            payload = e.read()
+            self.send_response(e.code)
+            for k, v in e.headers.items():
+                lk = k.lower()
+                if lk in {"transfer-encoding", "connection", "content-encoding"}:
+                    continue
+                self.send_header(k, v)
+            self.send_header("Content-Length", str(len(payload)))
+            self.end_headers()
+            self.wfile.write(payload)
+        except Exception as e:
+            payload = json.dumps({"error": str(e)}).encode()
+            self.send_response(502)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(payload)))
+            self.end_headers()
+            self.wfile.write(payload)
+
+    def log_message(self, fmt, *args):
+        sys.stderr.write("[filter] " + fmt % args + "\n")
+
+with socketserver.ThreadingTCPServer(("127.0.0.1", PORT), Handler) as httpd:
+    print(f"Filtering proxy listening on http://127.0.0.1:{PORT} → {TARGET}", flush=True)
+    httpd.serve_forever()
+PY
+
+REAL_LITELLM_URL="$REAL_LITELLM_URL" FILTER_PORT="$FILTER_PORT" \
+  python3 "$FILTER_SCRIPT_PATH" > "$FILTER_LOG_PATH" 2>&1 &
+
+FILTER_PID="$!"
+sleep 1
+
+if ! curl -sS "$FILTER_URL/v1/models" \
+  -H "Authorization: Bearer $LITELLM_KEY" >"$FILTER_MODELS_OUTPUT"; then
+  echo "ERROR: Filter proxy did not start correctly."
+  echo "Log:"
+  cat "$FILTER_LOG_PATH"
+  kill "$FILTER_PID" 2>/dev/null || true
+  exit 1
+fi
+
+echo "Filter proxy is running. It strips output_config before forwarding to LiteLLM."
+echo
+
+CLEAN_HOME="$(mktemp -d "${TMPDIR:-/tmp}/claude-clean-home.XXXXXX")"
+
+echo "Launching Claude Code in clean HOME so it does not use your real Claude login."
+echo "Model: $MODEL"
+echo
+
+env -i \
+  HOME="$CLEAN_HOME" \
+  USER="${USER:-claw}" \
+  LOGNAME="${LOGNAME:-${USER:-claw}}" \
+  SHELL="${SHELL:-/bin/zsh}" \
+  TERM="${TERM:-xterm-256color}" \
+  PATH="$PATH" \
+  PWD="$PWD" \
+  TMPDIR="${TMPDIR:-/tmp}" \
+  GH_CONFIG_DIR="${GH_CONFIG_DIR:-$HOME/.config/gh}" \
+  CLAUDE_CONFIG_DIR="$CLAUDE_CONFIG_DIR" \
+  ANTHROPIC_BASE_URL="$FILTER_URL" \
+  ANTHROPIC_AUTH_TOKEN="$LITELLM_KEY" \
+  ANTHROPIC_MODEL="$MODEL" \
+  ANTHROPIC_SMALL_FAST_MODEL="$MODEL" \
+  claude --mcp-config "$MCP_CONFIG_PATH" --model "$MODEL"
