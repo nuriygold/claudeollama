@@ -4,6 +4,30 @@ set -euo pipefail
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd -- "$SCRIPT_DIR/.." && pwd)"
 
+require_command() {
+  local cmd="$1"
+  if ! command -v "$cmd" >/dev/null 2>&1; then
+    echo "ERROR: Required command not found: $cmd"
+    exit 1
+  fi
+}
+
+cleanup() {
+  if [[ -n "${FILTER_PID:-}" ]]; then
+    kill "$FILTER_PID" 2>/dev/null || true
+  fi
+  if [[ -n "${CLEAN_HOME:-}" && -d "${CLEAN_HOME:-}" ]]; then
+    rm -rf "$CLEAN_HOME"
+  fi
+}
+
+trap cleanup EXIT
+
+require_command claude
+require_command python3
+require_command curl
+require_command lsof
+
 REAL_LITELLM_URL="${REAL_LITELLM_URL:-http://127.0.0.1:4000}"
 FILTER_PORT="${FILTER_PORT:-4001}"
 FILTER_URL="http://127.0.0.1:${FILTER_PORT}"
@@ -172,6 +196,14 @@ echo "Filter proxy is running. It strips output_config before forwarding to Lite
 echo
 
 CLEAN_HOME="$(mktemp -d "${TMPDIR:-/tmp}/claude-clean-home.XXXXXX")"
+CLAUDE_ARGS=(--model "$MODEL")
+
+if [[ -f "$MCP_CONFIG_PATH" ]]; then
+  CLAUDE_ARGS=(--mcp-config "$MCP_CONFIG_PATH" "${CLAUDE_ARGS[@]}")
+else
+  echo "No MCP config found at $MCP_CONFIG_PATH. Continuing without --mcp-config."
+  echo
+fi
 
 echo "Launching Claude Code in clean HOME so it does not use your real Claude login."
 echo "Model: $MODEL"
@@ -192,4 +224,4 @@ env -i \
   ANTHROPIC_AUTH_TOKEN="$LITELLM_KEY" \
   ANTHROPIC_MODEL="$MODEL" \
   ANTHROPIC_SMALL_FAST_MODEL="$MODEL" \
-  claude --mcp-config "$MCP_CONFIG_PATH" --model "$MODEL"
+  claude "${CLAUDE_ARGS[@]}"
