@@ -1,0 +1,45 @@
+{
+  "mcpServers": {
+    "github": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-github"
+      ]
+    },
+    "filesystem": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-filesystem",
+        "/Users/claw"
+      ]
+    },
+    "google-calendar": {
+      "command": "node",
+      "args": [
+        "/Users/claw/.local/share/mcp-servers/google-calendar-mcp/dist/index.js"
+      ]
+    },
+    "supabase": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@supabase/mcp-server-supabase@latest"
+      ]
+    },
+    "vercel": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@vercel/mcp-adapter@latest"
+      ]
+    },
+    "memory": {
+      "command": "node",
+      "args": [
+        "/Users/claw/.local/share/mcp-servers/memory/node_modules/@modelcontextprotocol/server-memory/dist/index.js"
+      ]
+    }
+  }
+}
