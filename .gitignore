@@ -5,3 +5,5 @@ config/*.secret.*
 *.log
 .DS_Store
 .claude/claudelitellmmcps.json
+.config/claudelitellm/*.env
+*.env
