@@ -91,14 +91,17 @@ echo "Checking existing LiteLLM..."
 HTTP_CODE="$(curl -sS -o "$LITELLM_MODELS_OUTPUT" -w "%{http_code}" "$REAL_LITELLM_URL/v1/models" || true)"
 
 if [[ "$HTTP_CODE" == "401" || "$HTTP_CODE" == "403" ]]; then
-  echo "LiteLLM requires a key."
-  read -r -s -p "Paste your LiteLLM key: " LITELLM_KEY
-  echo
+  LITELLM_KEY="${LITELLM_KEY:-${LITELLM_API_KEY:-}}"
+  if [[ -z "$LITELLM_KEY" ]]; then
+    echo "LiteLLM requires a key."
+    read -r -s -p "Paste your LiteLLM key: " LITELLM_KEY
+    echo
+  fi
   HTTP_CODE="$(curl -sS -o "$LITELLM_MODELS_OUTPUT" -w "%{http_code}" \
     -H "Authorization: Bearer $LITELLM_KEY" \
     "$REAL_LITELLM_URL/v1/models" || true)"
 else
-  LITELLM_KEY="${LITELLM_KEY:-sk-litellm-local}"
+  LITELLM_KEY="${LITELLM_KEY:-${LITELLM_API_KEY:-sk-litellm-local}}"
 fi
 
 if [[ "$HTTP_CODE" != "200" ]]; then
