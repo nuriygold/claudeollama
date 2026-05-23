@@ -23,6 +23,7 @@ By default it builds a temporary merged config home so Claude Code can use exist
 ## Usage
 
 ```bash
+export LITELLM_KEY="<your-litellm-key>"
 bin/bootstrap-claude-config
 bin/claudelitellm
 ```
@@ -44,6 +45,14 @@ Optional variables:
 - `CLAUDE_CONFIG_DIR`
 - `MCP_CONFIG_PATH`
 - `LITELLM_KEY`
+
+For launcher auth, export the client key as `LITELLM_KEY` before launch.
+
+```bash
+export LITELLM_KEY="<your-litellm-key>"
+```
+
+If your LiteLLM server is configured to require a master key, that server-side config is typically named `LITELLM_MASTER_KEY` in the LiteLLM process configuration.
 
 Default behavior:
 
