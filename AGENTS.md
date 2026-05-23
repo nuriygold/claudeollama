@@ -6,3 +6,12 @@ Use this file as the Codex-facing repo instruction stub.
 - No em dashes in docs or messages for this repo.
 - Prefer internet-backed verification over stale local assumptions when validating changes.
 - For Codex-created testing or deployment branches in this repo, use the `joy/` prefix.
+
+
+<claude-mem-context>
+# Memory Context
+
+# [claudelitellm] recent context, 2026-05-21 5:35am PDT
+
+No previous sessions found.
+</claude-mem-context>
