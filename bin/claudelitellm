@@ -28,29 +28,52 @@ require_command python3
 require_command curl
 require_command lsof
 
+append_unique_dir() {
+  local dir="$1"
+  [[ -d "$dir" ]] || return 0
+
+  local existing
+  for existing in "${CONFIG_SOURCE_DIRS[@]:-}"; do
+    [[ "$existing" == "$dir" ]] && return 0
+  done
+
+  CONFIG_SOURCE_DIRS+=("$dir")
+}
+
+collect_parent_config_dirs() {
+  local dir="$1"
+  local chain=()
+
+  while [[ "$dir" != "/" ]]; do
+    chain+=("$dir")
+    dir="$(dirname "$dir")"
+  done
+  chain+=("/")
+
+  local idx
+  for (( idx=${#chain[@]}-1; idx>=0; idx-- )); do
+    append_unique_dir "${chain[$idx]}/.claude"
+    append_unique_dir "${chain[$idx]}/.codex"
+  done
+}
+
+overlay_tree() {
+  local src="$1"
+  local dst="$2"
+
+  [[ -d "$src" ]] || return 0
+  mkdir -p "$dst"
+  cp -R "$src"/. "$dst"/
+}
+
 HOME_CLAUDE_CONFIG_DIR="$HOME/.claude"
+HOME_CODEX_CONFIG_DIR="$HOME/.codex"
 REPO_CLAUDE_CONFIG_DIR="$REPO_ROOT/.claude"
+REPO_CODEX_CONFIG_DIR="$REPO_ROOT/.codex"
 REAL_LITELLM_URL="${REAL_LITELLM_URL:-http://127.0.0.1:4000}"
 FILTER_PORT="${FILTER_PORT:-4001}"
 FILTER_URL="http://127.0.0.1:${FILTER_PORT}"
 MODEL="${ANTHROPIC_MODEL:-gpt-5.4}"
-
-if [[ -n "${CLAUDE_CONFIG_DIR:-}" ]]; then
-  CLAUDE_CONFIG_DIR="$CLAUDE_CONFIG_DIR"
-elif [[ -d "$REPO_CLAUDE_CONFIG_DIR" ]]; then
-  CLAUDE_CONFIG_DIR="$REPO_CLAUDE_CONFIG_DIR"
-else
-  CLAUDE_CONFIG_DIR="$HOME_CLAUDE_CONFIG_DIR"
-fi
-
-if [[ -n "${MCP_CONFIG_PATH:-}" ]]; then
-  MCP_CONFIG_PATH="$MCP_CONFIG_PATH"
-else
-  MCP_CONFIG_PATH="$CLAUDE_CONFIG_DIR/claudelitellmmcps.json"
-  if [[ ! -f "$MCP_CONFIG_PATH" && -f "$HOME_CLAUDE_CONFIG_DIR/claudelitellmmcps.json" ]]; then
-    MCP_CONFIG_PATH="$HOME_CLAUDE_CONFIG_DIR/claudelitellmmcps.json"
-  fi
-fi
 
 FILTER_SCRIPT_PATH="${FILTER_SCRIPT_PATH:-${TMPDIR:-/tmp}/litellm_strip_output_config_proxy.py}"
 FILTER_LOG_PATH="${FILTER_LOG_PATH:-${TMPDIR:-/tmp}/litellm-filter.log}"
@@ -214,12 +237,62 @@ echo "Filter proxy is running. It strips output_config before forwarding to Lite
 echo
 
 CLEAN_HOME="$(mktemp -d "${TMPDIR:-/tmp}/claude-clean-home.XXXXXX")"
+MERGED_CLAUDE_CONFIG_DIR="$CLEAN_HOME/.claude"
+MERGED_CODEX_CONFIG_DIR="$CLEAN_HOME/.codex"
+CONFIG_SOURCE_DIRS=()
+
+append_unique_dir "$REPO_CLAUDE_CONFIG_DIR"
+append_unique_dir "$REPO_CODEX_CONFIG_DIR"
+append_unique_dir "$HOME_CLAUDE_CONFIG_DIR"
+append_unique_dir "$HOME_CODEX_CONFIG_DIR"
+collect_parent_config_dirs "$PWD"
+
+for source_dir in "${CONFIG_SOURCE_DIRS[@]}"; do
+  case "$(basename "$source_dir")" in
+    .claude)
+      overlay_tree "$source_dir" "$MERGED_CLAUDE_CONFIG_DIR"
+      ;;
+    .codex)
+      overlay_tree "$source_dir" "$MERGED_CODEX_CONFIG_DIR"
+      ;;
+  esac
+done
+
+if [[ -n "${CLAUDE_CONFIG_DIR:-}" ]]; then
+  overlay_tree "$CLAUDE_CONFIG_DIR" "$MERGED_CLAUDE_CONFIG_DIR"
+fi
+
+CLAUDE_CONFIG_DIR="$MERGED_CLAUDE_CONFIG_DIR"
+
+if [[ -n "${MCP_CONFIG_PATH:-}" ]]; then
+  RESOLVED_MCP_CONFIG_PATH="$MCP_CONFIG_PATH"
+elif [[ -f "$CLAUDE_CONFIG_DIR/claudelitellmmcps.json" ]]; then
+  RESOLVED_MCP_CONFIG_PATH="$CLAUDE_CONFIG_DIR/claudelitellmmcps.json"
+else
+  RESOLVED_MCP_CONFIG_PATH=""
+fi
+
+echo "Merged config sources:"
+for source_dir in "${CONFIG_SOURCE_DIRS[@]}"; do
+  echo "  - $source_dir"
+done
+if [[ -n "${CLAUDE_CONFIG_DIR:-}" ]]; then
+  echo "Merged .claude target: $CLAUDE_CONFIG_DIR"
+fi
+if [[ -d "$MERGED_CODEX_CONFIG_DIR" ]]; then
+  echo "Merged .codex target:  $MERGED_CODEX_CONFIG_DIR"
+fi
+if [[ -n "${MCP_CONFIG_PATH:-}" ]]; then
+  echo "MCP config override:  $MCP_CONFIG_PATH"
+fi
+echo
+
 CLAUDE_ARGS=(--model "$MODEL")
 
-if [[ -f "$MCP_CONFIG_PATH" ]]; then
-  CLAUDE_ARGS=(--mcp-config "$MCP_CONFIG_PATH" "${CLAUDE_ARGS[@]}")
+if [[ -n "$RESOLVED_MCP_CONFIG_PATH" && -f "$RESOLVED_MCP_CONFIG_PATH" ]]; then
+  CLAUDE_ARGS=(--mcp-config "$RESOLVED_MCP_CONFIG_PATH" "${CLAUDE_ARGS[@]}")
 else
-  echo "No MCP config found at $MCP_CONFIG_PATH. Continuing without --mcp-config."
+  echo "No MCP config found in merged .claude directory. Continuing without --mcp-config."
   echo
 fi
 
@@ -236,6 +309,7 @@ env -i \
   PATH="$PATH" \
   PWD="$PWD" \
   TMPDIR="${TMPDIR:-/tmp}" \
+  CODEX_HOME="$MERGED_CODEX_CONFIG_DIR" \
   GH_CONFIG_DIR="${GH_CONFIG_DIR:-$HOME/.config/gh}" \
   CLAUDE_CONFIG_DIR="$CLAUDE_CONFIG_DIR" \
   ANTHROPIC_BASE_URL="$FILTER_URL" \

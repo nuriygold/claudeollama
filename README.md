@@ -2,7 +2,7 @@
 
 `claudelitellm` is a local launcher that runs Claude Code against an existing LiteLLM proxy through a small local filtering proxy.
 
-By default it now prefers this repo's `.claude` directory for Claude settings, while still falling back to your real `~/.claude/claudelitellmmcps.json` when that is the only MCP config available.
+By default it builds a temporary merged config home so Claude Code can use existing `.claude` and `.codex` settings even though the launcher runs under a clean temporary `HOME`.
 
 ## Files
 
@@ -54,5 +54,13 @@ Default behavior:
 ## Notes
 
 The launcher creates a temporary clean HOME for Claude Code so it does not reuse an existing Claude login session.
+
+Before launch it overlays config directories in this order:
+
+- this repo's `.claude` and `.codex` if present
+- your real `~/.claude` and `~/.codex`
+- any `.claude` or `.codex` directories found while walking from `/` down to the current working directory
+
+Later layers win, so project-local config can override home-level defaults.
 
 The checked-in MCP example includes the same server shape as the existing local setup, including `memory`, so it is easy to mirror a pre-existing Claude MCP environment without committing live credentials.
