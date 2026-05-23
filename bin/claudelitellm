@@ -63,7 +63,8 @@ overlay_tree() {
 
   [[ -d "$src" ]] || return 0
   mkdir -p "$dst"
-  cp -R "$src"/. "$dst"/
+  chmod -R u+w "$dst" 2>/dev/null || true
+  ditto "$src" "$dst"
 }
 
 HOME_CLAUDE_CONFIG_DIR="$HOME/.claude"
