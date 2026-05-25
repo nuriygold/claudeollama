@@ -1,0 +1,33 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd -- "$SCRIPT_DIR/.." && pwd)"
+TARGET_PATH="${1:-$HOME/.local/bin/claudelitellm}"
+TARGET_DIR="$(dirname -- "$TARGET_PATH")"
+
+mkdir -p "$TARGET_DIR"
+
+cat > "$TARGET_PATH" <<EOF
+#!/usr/bin/env bash
+set -euo pipefail
+
+launchers=(
+  "$REPO_ROOT/bin/claudelitellm"
+  "\$HOME/Organized/Repositories/claudelitellm/bin/claudelitellm"
+  "/Volumes/SEAGATE/iCloud/Repositories/claudelitellm/bin/claudelitellm"
+)
+
+for launcher in "\${launchers[@]}"; do
+  if [[ -x "\$launcher" ]]; then
+    exec "\$launcher" "\$@"
+  fi
+done
+
+echo "claudelitellm not found in expected locations:" >&2
+printf '  %s\n' "\${launchers[@]}" >&2
+exit 127
+EOF
+
+chmod +x "$TARGET_PATH"
+echo "Installed wrapper at $TARGET_PATH"

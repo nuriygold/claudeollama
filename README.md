@@ -8,6 +8,7 @@ By default it builds a temporary merged config home so Claude Code can use exist
 
 - `bin/claudelitellm` — launcher script
 - `bin/bootstrap-claude-config` — copies your real MCP config into this repo for local use without committing secrets
+- `bin/install-local-wrapper` — installs a resilient `~/.local/bin/claudelitellm` wrapper with fallback repo locations
 - `config/litellm.config.yaml.example` — example LiteLLM config
 - `.claude/settings.local.json` — repo-local Claude settings used by default
 - `.claude/claudelitellmmcps.json.example` — safe MCP starter config you can copy locally
@@ -25,8 +26,11 @@ By default it builds a temporary merged config home so Claude Code can use exist
 ```bash
 export LITELLM_KEY="<your-litellm-key>"
 bin/bootstrap-claude-config
+bin/install-local-wrapper
 bin/claudelitellm
 ```
+
+`bin/install-local-wrapper` writes a small executable wrapper to `~/.local/bin/claudelitellm` by default. The wrapper prefers the current repo copy of `bin/claudelitellm` and can fall back to the common backup locations under `~/Organized/Repositories/claudelitellm` and `/Volumes/SEAGATE/iCloud/Repositories/claudelitellm`.
 
 `bin/bootstrap-claude-config` does this:
 

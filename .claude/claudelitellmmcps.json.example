@@ -40,6 +40,13 @@
       "args": [
         "/Users/claw/.local/share/mcp-servers/memory/node_modules/@modelcontextprotocol/server-memory/dist/index.js"
       ]
+    },
+    "openclaw": {
+      "command": "openclaw",
+      "args": [
+        "mcp",
+        "serve"
+      ]
     }
   }
 }
