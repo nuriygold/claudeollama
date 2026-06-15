@@ -12,13 +12,13 @@
       "args": [
         "-y",
         "@modelcontextprotocol/server-filesystem",
-        "/Users/claw"
+        "/Users/aaliyathewarrior"
       ]
     },
     "google-calendar": {
       "command": "node",
       "args": [
-        "/Users/claw/.local/share/mcp-servers/google-calendar-mcp/dist/index.js"
+        "/Users/aaliyathewarrior/.local/share/mcp-servers/google-calendar-mcp/dist/index.js"
       ]
     },
     "supabase": {
@@ -36,16 +36,10 @@
       ]
     },
     "memory": {
-      "command": "node",
+      "command": "npx",
       "args": [
-        "/Users/claw/.local/share/mcp-servers/memory/node_modules/@modelcontextprotocol/server-memory/dist/index.js"
-      ]
-    },
-    "openclaw": {
-      "command": "openclaw",
-      "args": [
-        "mcp",
-        "serve"
+        "-y",
+        "@modelcontextprotocol/server-memory"
       ]
     }
   }

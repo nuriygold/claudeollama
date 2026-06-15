@@ -1,6 +1,6 @@
 # claudelitellm
 
-`claudelitellm` is a local launcher that runs Claude Code against an existing LiteLLM proxy through a small local filtering proxy.
+`claudelitellm` is a local launcher that runs Claude Code against a LiteLLM proxy through a small local filtering proxy.
 
 By default it builds a temporary merged config home so Claude Code can use existing `.claude` and `.codex` settings even though the launcher runs under a clean temporary `HOME`.
 
@@ -8,7 +8,6 @@ By default it builds a temporary merged config home so Claude Code can use exist
 
 - `bin/claudelitellm` — launcher script
 - `bin/bootstrap-claude-config` — copies your real MCP config into this repo for local use without committing secrets
-- `bin/install-local-wrapper` — installs a resilient `~/.local/bin/claudelitellm` wrapper with fallback repo locations
 - `config/litellm.config.yaml.example` — example LiteLLM config
 - `.claude/settings.local.json` — repo-local Claude settings used by default
 - `.claude/claudelitellmmcps.json.example` — safe MCP starter config you can copy locally
@@ -19,18 +18,19 @@ By default it builds a temporary merged config home so Claude Code can use exist
 - `python3`
 - `curl`
 - `lsof`
-- a running LiteLLM instance, defaulting to `http://127.0.0.1:4000`
+- `litellm` if you want the launcher to auto-start the repo-local LiteLLM on `http://127.0.0.1:4000`
 
 ## Usage
 
 ```bash
-export LITELLM_KEY="<your-litellm-key>"
 bin/bootstrap-claude-config
-bin/install-local-wrapper
 bin/claudelitellm
 ```
 
-`bin/install-local-wrapper` writes a small executable wrapper to `~/.local/bin/claudelitellm` by default. The wrapper prefers the current repo copy of `bin/claudelitellm` and can fall back to the common backup locations under `~/Organized/Repositories/claudelitellm` and `/Volumes/SEAGATE/iCloud/Repositories/claudelitellm`.
+If `REAL_LITELLM_URL` points at the default local endpoint and nothing is listening on port `4000`, the launcher will try to start LiteLLM itself using:
+
+- `config/litellm.env`
+- `config/litellm.config.yaml`
 
 `bin/bootstrap-claude-config` does this:
 
@@ -50,7 +50,7 @@ Optional variables:
 - `MCP_CONFIG_PATH`
 - `LITELLM_KEY`
 
-For launcher auth, export the client key as `LITELLM_KEY` before launch.
+For launcher auth, export the client key as `LITELLM_KEY` before launch if you are connecting to an already-running LiteLLM that requires auth and you do not want the launcher to prompt.
 
 ```bash
 export LITELLM_KEY="<your-litellm-key>"
