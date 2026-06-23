@@ -27,6 +27,18 @@ if path.exists():
 PY
 }
 
+port_listen_pids() {
+  lsof -tiTCP:"$1" -sTCP:LISTEN 2>/dev/null | tr '\n' ' ' | sed 's/[[:space:]]*$//'
+}
+
+filter_proxy_matches_expected() {
+  local code
+  code="$(curl -sS -o "$FILTER_MODELS_OUTPUT" -w "%{http_code}" \
+    -H "Authorization: Bearer $LITELLM_KEY" \
+    "$FILTER_URL/v1/models" || true)"
+  [[ "$code" == "200" || "$code" == "401" || "$code" == "403" ]]
+}
+
 cleanup() {
   if [[ -n "${FILTER_PID:-}" ]]; then
     kill "$FILTER_PID" 2>/dev/null || true
@@ -222,28 +234,39 @@ echo
 echo "Confirmed LiteLLM is reachable."
 echo
 
-echo "Stopping any old filter proxy on port ${FILTER_PORT}..."
-lsof -tiTCP:"$FILTER_PORT" -sTCP:LISTEN | xargs -r kill 2>/dev/null || true
+EXISTING_FILTER_PIDS="$(port_listen_pids "$FILTER_PORT")"
+if [[ -n "$EXISTING_FILTER_PIDS" ]]; then
+  echo "Found existing listener on port ${FILTER_PORT}: ${EXISTING_FILTER_PIDS}"
+  if filter_proxy_matches_expected; then
+    echo "Reusing the existing filter proxy on port ${FILTER_PORT}."
+    FILTER_PID=""
+  else
+    echo "ERROR: Port ${FILTER_PORT} is already occupied by another process and the listener did not answer like the expected filter proxy."
+    lsof -nP -iTCP:"$FILTER_PORT" -sTCP:LISTEN || true
+    exit 1
+  fi
+else
+  echo "Stopping any old filter proxy on port ${FILTER_PORT}..."
 
-wait_for_filter_port_release() {
-  local attempt
-  for attempt in {1..20}; do
-    if ! lsof -tiTCP:"$FILTER_PORT" -sTCP:LISTEN >/dev/null 2>&1; then
-      return 0
-    fi
-    sleep 0.25
-  done
+  wait_for_filter_port_release() {
+    local attempt
+    for attempt in {1..20}; do
+      if ! lsof -tiTCP:"$FILTER_PORT" -sTCP:LISTEN >/dev/null 2>&1; then
+        return 0
+      fi
+      sleep 0.25
+    done
 
-  return 1
-}
+    return 1
+  }
 
-if ! wait_for_filter_port_release; then
-  echo "ERROR: Port ${FILTER_PORT} is still busy after stopping the old filter proxy."
-  lsof -nP -iTCP:"$FILTER_PORT" -sTCP:LISTEN || true
-  exit 1
-fi
+  if ! wait_for_filter_port_release; then
+    echo "ERROR: Port ${FILTER_PORT} is still busy after stopping the old filter proxy."
+    lsof -nP -iTCP:"$FILTER_PORT" -sTCP:LISTEN || true
+    exit 1
+  fi
 
-cat > "$FILTER_SCRIPT_PATH" <<'PY'
+  cat > "$FILTER_SCRIPT_PATH" <<'PY'
 import http.server
 import json
 import os
@@ -417,14 +440,15 @@ with TightLocalTCPServer((BIND_HOST, PORT), Handler) as httpd:
     httpd.serve_forever()
 PY
 
-REAL_LITELLM_URL="$REAL_LITELLM_URL" FILTER_PORT="$FILTER_PORT" \
-FILTER_UPSTREAM_TIMEOUT="$FILTER_UPSTREAM_TIMEOUT" \
-FILTER_UPSTREAM_CONNECT_TIMEOUT="$FILTER_UPSTREAM_CONNECT_TIMEOUT" \
-FILTER_UPSTREAM_RETRIES="$FILTER_UPSTREAM_RETRIES" \
-FILTER_UPSTREAM_RETRY_BACKOFF="$FILTER_UPSTREAM_RETRY_BACKOFF" \
-FILTER_MAX_CONNECTIONS="$FILTER_MAX_CONNECTIONS" \
-FILTER_MAX_KEEPALIVE_CONNECTIONS="$FILTER_MAX_KEEPALIVE_CONNECTIONS" \
-  python3 "$FILTER_SCRIPT_PATH" > "$FILTER_LOG_PATH" 2>&1 &
+  REAL_LITELLM_URL="$REAL_LITELLM_URL" FILTER_PORT="$FILTER_PORT" \
+  FILTER_UPSTREAM_TIMEOUT="$FILTER_UPSTREAM_TIMEOUT" \
+  FILTER_UPSTREAM_CONNECT_TIMEOUT="$FILTER_UPSTREAM_CONNECT_TIMEOUT" \
+  FILTER_UPSTREAM_RETRIES="$FILTER_UPSTREAM_RETRIES" \
+  FILTER_UPSTREAM_RETRY_BACKOFF="$FILTER_UPSTREAM_RETRY_BACKOFF" \
+  FILTER_MAX_CONNECTIONS="$FILTER_MAX_CONNECTIONS" \
+  FILTER_MAX_KEEPALIVE_CONNECTIONS="$FILTER_MAX_KEEPALIVE_CONNECTIONS" \
+    python3 "$FILTER_SCRIPT_PATH" > "$FILTER_LOG_PATH" 2>&1 &
+fi
 
 wait_for_filter_proxy() {
   local attempt
@@ -447,18 +471,23 @@ wait_for_filter_proxy() {
   return 1
 }
 
-FILTER_PID="$!"
+if [[ -z "${FILTER_PID:-}" ]]; then
+  echo "Filter proxy is already running. Reusing the existing listener."
+  echo
+else
+  FILTER_PID="$!"
 
-if ! wait_for_filter_proxy; then
-  echo "ERROR: Filter proxy did not start correctly."
-  echo "Log:"
-  cat "$FILTER_LOG_PATH"
-  kill "$FILTER_PID" 2>/dev/null || true
-  exit 1
+  if ! wait_for_filter_proxy; then
+    echo "ERROR: Filter proxy did not start correctly."
+    echo "Log:"
+    cat "$FILTER_LOG_PATH"
+    kill "$FILTER_PID" 2>/dev/null || true
+    exit 1
+  fi
+
+  echo "Filter proxy is running. It strips output_config before forwarding to LiteLLM."
+  echo
 fi
-
-echo "Filter proxy is running. It strips output_config before forwarding to LiteLLM."
-echo
 
 CLEAN_HOME="$(mktemp -d "${TMPDIR:-/tmp}/claude-clean-home.XXXXXX")"
 mkdir -p "$CLEAN_HOME/.local/bin"
