@@ -5,35 +5,49 @@
       "args": [
         "-y",
         "@modelcontextprotocol/server-github"
-      ]
+      ],
+      "env": {
+        "GITHUB_PERSONAL_ACCESS_TOKEN": "${GITHUB_PERSONAL_ACCESS_TOKEN}"
+      }
     },
     "filesystem": {
       "command": "npx",
       "args": [
         "-y",
         "@modelcontextprotocol/server-filesystem",
-        "/Users/aaliyathewarrior"
+        "${HOME}"
       ]
     },
     "google-calendar": {
       "command": "node",
       "args": [
-        "/Users/aaliyathewarrior/.local/share/mcp-servers/google-calendar-mcp/dist/index.js"
-      ]
+        "${GOOGLE_CALENDAR_MCP_PATH}"
+      ],
+      "env": {
+        "GOOGLE_CLIENT_ID": "${GOOGLE_CLIENT_ID}",
+        "GOOGLE_CLIENT_SECRET": "${GOOGLE_CLIENT_SECRET}",
+        "GOOGLE_REFRESH_TOKEN": "${GOOGLE_REFRESH_TOKEN}"
+      }
     },
     "supabase": {
       "command": "npx",
       "args": [
         "-y",
         "@supabase/mcp-server-supabase@latest"
-      ]
+      ],
+      "env": {
+        "SUPABASE_ACCESS_TOKEN": "${SUPABASE_ACCESS_TOKEN}"
+      }
     },
     "vercel": {
       "command": "npx",
       "args": [
         "-y",
-        "@vercel/mcp-adapter@latest"
-      ]
+        "vercel-mcp"
+      ],
+      "env": {
+        "VERCEL_API_KEY": "${VERCEL_API_KEY}"
+      }
     },
     "memory": {
       "command": "npx",

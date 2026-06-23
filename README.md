@@ -94,8 +94,10 @@ This build has a dedicated MCP config path.
 Resolution order is:
 
 1. `MCP_CONFIG_PATH` when explicitly set
-2. merged `CLAUDE_CONFIG_DIR/claudelitellmmcps.json`
-3. no MCP config if neither exists
+2. `~/.claude/claudelitellmmcps.json`
+3. repo-local `.claude/claudelitellmmcps.json` copied into the merged clean home
+4. merged `CLAUDE_CONFIG_DIR/claudelitellmmcps.json` when neither direct source exists
+5. no MCP config if none of those exist
 
 The important operational detail is that this wrapper uses `claudelitellmmcps.json`, not the normal general-purpose Claude MCP registration path as its primary integration surface.
 
@@ -105,10 +107,10 @@ For local operator use, the usual real file is:
 
 `bin/bootstrap-claude-config` does this:
 
-- if `~/.claude/claudelitellmmcps.json` exists, it copies that real file into `.claude/claudelitellmmcps.json` for this repo
-- otherwise it seeds `.claude/claudelitellmmcps.json` from the checked-in example
+- if `~/.claude/claudelitellmmcps.json` already exists, it leaves it in place and reminds you that the launcher prefers it
+- otherwise it seeds `~/.claude/claudelitellmmcps.json` from the checked-in example
 
-The repo-local real `.claude/claudelitellmmcps.json` is now tracked in this repo so machine-specific clones receive the same MCP config file on pull.
+The committed repo example is the safe template. Personal tokens should live in your home MCP config or in environment variables, not in the tracked repo-local file.
 
 ## Telegram wiring in this build
 
@@ -154,10 +156,14 @@ If `REAL_LITELLM_URL` points at the default local endpoint and nothing is listen
 
 `bin/bootstrap-claude-config` does this:
 
-- if `~/.claude/claudelitellmmcps.json` exists, it copies that real file into `.claude/claudelitellmmcps.json` for this repo
-- otherwise it seeds `.claude/claudelitellmmcps.json` from the checked-in example
+- if `~/.claude/claudelitellmmcps.json` exists, it leaves that file as the preferred source
+- otherwise it seeds `~/.claude/claudelitellmmcps.json` from the checked-in example
 
 ```bash
+export GITHUB_PERSONAL_ACCESS_TOKEN="..."
+export SUPABASE_ACCESS_TOKEN="..."
+export VERCEL_API_KEY="..."
+
 REAL_LITELLM_URL=http://127.0.0.1:4000 \
 ANTHROPIC_MODEL=gpt-5.4 \
 MCP_CONFIG_PATH="$HOME/.claude/claudelitellmmcps.json" \
