@@ -12,6 +12,21 @@ require_command() {
   fi
 }
 
+cleanup_dir() {
+  local path="$1"
+  python3 - <<'PY' "$path"
+import pathlib
+import shutil
+import sys
+
+path = pathlib.Path(sys.argv[1])
+if path.exists():
+    shutil.rmtree(path, ignore_errors=True)
+    if path.exists():
+        print(f"WARN: Failed to fully remove temporary directory: {path}", file=sys.stderr)
+PY
+}
+
 cleanup() {
   if [[ -n "${FILTER_PID:-}" ]]; then
     kill "$FILTER_PID" 2>/dev/null || true
@@ -22,7 +37,7 @@ cleanup() {
     wait "$LITELLM_PID" 2>/dev/null || true
   fi
   if [[ -n "${CLEAN_HOME:-}" && -d "${CLEAN_HOME:-}" ]]; then
-    rm -rf "$CLEAN_HOME"
+    cleanup_dir "$CLEAN_HOME"
   fi
 }
 
@@ -519,6 +534,11 @@ echo "Launching Claude Code in clean HOME so it does not use your real Claude lo
 echo "Model: $MODEL"
 echo
 
+CLAUDE_BIN_ARGS=()
+if [[ $# -gt 0 ]]; then
+  CLAUDE_BIN_ARGS=("$@")
+fi
+
 env -i \
   HOME="$CLEAN_HOME" \
   USER="${USER:-claw}" \
@@ -535,4 +555,4 @@ env -i \
   ANTHROPIC_AUTH_TOKEN="$LITELLM_KEY" \
   ANTHROPIC_MODEL="$MODEL" \
   ANTHROPIC_SMALL_FAST_MODEL="$MODEL" \
-  claude "${CLAUDE_ARGS[@]}"
+  claude "${CLAUDE_ARGS[@]}" "${CLAUDE_BIN_ARGS[@]}"

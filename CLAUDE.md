@@ -87,8 +87,9 @@ The README documents these local dependencies:
 - Upstream transport now uses a shared `httpx` client with pooling and bounded retries for transient idempotent-request failures; stability tuning lives in the `FILTER_UPSTREAM_*` and `FILTER_MAX_*` environment variables.
 - Claude runs with `env -i`, so environment propagation is explicit. If a tool stops working, check whether the required variable is being passed through in the `env -i` block.
 - The merged clean-home `settings.json` has its `hooks` key stripped before launch so home or parent `SessionStart` automations do not run inside the isolated wrapper session.
+- The launcher only forwards explicit script arguments into the nested Claude invocation, which prevents inherited outer-session `--print` mode from breaking the inner interactive launch.
 - `GH_CONFIG_DIR` is forwarded from the user environment so GitHub auth can still work inside the clean HOME session.
-- Temporary artifacts are written to `/tmp` or `$TMPDIR` by default: the generated Python proxy, proxy log, LiteLLM model response captures, and the temporary Claude home directory.
+- Temporary artifacts are written to `/tmp` or `$TMPDIR` by default: the generated Python proxy, proxy log, LiteLLM model response captures, and the temporary Claude home directory. Temp-home cleanup uses Python `shutil.rmtree` to avoid noisy `rm` teardown failures on transient npm cache trees.
 
 ## Key configuration knobs
 
