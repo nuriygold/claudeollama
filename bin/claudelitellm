@@ -15,6 +15,11 @@ require_command() {
 cleanup() {
   if [[ -n "${FILTER_PID:-}" ]]; then
     kill "$FILTER_PID" 2>/dev/null || true
+    wait "$FILTER_PID" 2>/dev/null || true
+  fi
+  if [[ -n "${LITELLM_PID:-}" ]]; then
+    kill "$LITELLM_PID" 2>/dev/null || true
+    wait "$LITELLM_PID" 2>/dev/null || true
   fi
   if [[ -n "${CLEAN_HOME:-}" && -d "${CLEAN_HOME:-}" ]]; then
     rm -rf "$CLEAN_HOME"
@@ -71,15 +76,78 @@ HOME_CLAUDE_CONFIG_DIR="$HOME/.claude"
 HOME_CODEX_CONFIG_DIR="$HOME/.codex"
 REPO_CLAUDE_CONFIG_DIR="$REPO_ROOT/.claude"
 REPO_CODEX_CONFIG_DIR="$REPO_ROOT/.codex"
+HOME_MCP_CONFIG_PATH="$HOME_CLAUDE_CONFIG_DIR/claudelitellmmcps.json"
+REPO_MCP_CONFIG_PATH="$REPO_CLAUDE_CONFIG_DIR/claudelitellmmcps.json"
+LOCAL_LITELLM_CONFIG_PATH="$REPO_ROOT/config/litellm.config.yaml"
+LOCAL_LITELLM_ENV_PATH="$REPO_ROOT/config/litellm.env"
 REAL_LITELLM_URL="${REAL_LITELLM_URL:-http://127.0.0.1:4000}"
 FILTER_PORT="${FILTER_PORT:-4001}"
 FILTER_URL="http://127.0.0.1:${FILTER_PORT}"
 MODEL="${ANTHROPIC_MODEL:-gpt-5.4}"
+LOCAL_LITELLM_LOG_PATH="${LOCAL_LITELLM_LOG_PATH:-${TMPDIR:-/tmp}/litellm-local.log}"
 
 FILTER_SCRIPT_PATH="${FILTER_SCRIPT_PATH:-${TMPDIR:-/tmp}/litellm_strip_output_config_proxy.py}"
 FILTER_LOG_PATH="${FILTER_LOG_PATH:-${TMPDIR:-/tmp}/litellm-filter.log}"
 LITELLM_MODELS_OUTPUT="${LITELLM_MODELS_OUTPUT:-${TMPDIR:-/tmp}/litellm_models.json}"
 FILTER_MODELS_OUTPUT="${FILTER_MODELS_OUTPUT:-${TMPDIR:-/tmp}/litellm_filter_models.json}"
+
+can_autostart_local_litellm() {
+  [[ "$REAL_LITELLM_URL" == "http://127.0.0.1:4000" || "$REAL_LITELLM_URL" == "http://localhost:4000" ]]
+}
+
+load_local_litellm_env() {
+  [[ -f "$LOCAL_LITELLM_ENV_PATH" ]] || return 1
+  set -a
+  # shellcheck disable=SC1090
+  source "$LOCAL_LITELLM_ENV_PATH"
+  set +a
+}
+
+start_local_litellm() {
+  [[ -f "$LOCAL_LITELLM_CONFIG_PATH" ]] || return 1
+  [[ -f "$LOCAL_LITELLM_ENV_PATH" ]] || return 1
+  require_command litellm
+
+  echo "LiteLLM is down at $REAL_LITELLM_URL."
+  echo "Starting the repo-local LiteLLM on port 4000..."
+
+  load_local_litellm_env
+  LITELLM_KEY="${LITELLM_KEY:-${LITELLM_API_KEY:-${LITELLM_MASTER_KEY:-}}}"
+
+  : >"$LOCAL_LITELLM_LOG_PATH"
+  (
+    cd "$REPO_ROOT"
+    litellm --host 127.0.0.1 --port 4000 --config "$LOCAL_LITELLM_CONFIG_PATH"
+  ) >"$LOCAL_LITELLM_LOG_PATH" 2>&1 &
+  LITELLM_PID="$!"
+
+  local attempt
+  for attempt in {1..20}; do
+    local code
+    code="$(curl -sS -o "$LITELLM_MODELS_OUTPUT" -w "%{http_code}" "$REAL_LITELLM_URL/v1/models" || true)"
+    if [[ "$code" == "200" || "$code" == "401" || "$code" == "403" ]]; then
+      return 0
+    fi
+    if ! kill -0 "$LITELLM_PID" 2>/dev/null; then
+      break
+    fi
+    sleep 1
+  done
+
+  echo "ERROR: Local LiteLLM did not start correctly."
+  echo "Log:"
+  cat "$LOCAL_LITELLM_LOG_PATH"
+  exit 1
+}
+
+materialize_mcp_config() {
+  local src="$1"
+  local dst="$2"
+
+  [[ -f "$src" ]] || return 1
+  mkdir -p "$(dirname "$dst")"
+  cp -fL "$src" "$dst"
+}
 
 echo "=== Claude Code → filter proxy → existing LiteLLM → Azure ${MODEL} ==="
 echo "Real LiteLLM: $REAL_LITELLM_URL"
@@ -90,15 +158,23 @@ echo
 echo "Checking existing LiteLLM..."
 HTTP_CODE="$(curl -sS -o "$LITELLM_MODELS_OUTPUT" -w "%{http_code}" "$REAL_LITELLM_URL/v1/models" || true)"
 
+if [[ "$HTTP_CODE" == "000" ]] && can_autostart_local_litellm; then
+  start_local_litellm
+  HTTP_CODE="$(curl -sS -o "$LITELLM_MODELS_OUTPUT" -w "%{http_code}" "$REAL_LITELLM_URL/v1/models" || true)"
+fi
+
 if [[ "$HTTP_CODE" == "401" || "$HTTP_CODE" == "403" ]]; then
-  echo "LiteLLM requires a key."
-  read -r -s -p "Paste your LiteLLM key: " LITELLM_KEY
-  echo
+  LITELLM_KEY="${LITELLM_KEY:-${LITELLM_API_KEY:-}}"
+  if [[ -z "$LITELLM_KEY" ]]; then
+    echo "LiteLLM requires a key."
+    read -r -s -p "Paste your LiteLLM key: " LITELLM_KEY
+    echo
+  fi
   HTTP_CODE="$(curl -sS -o "$LITELLM_MODELS_OUTPUT" -w "%{http_code}" \
     -H "Authorization: Bearer $LITELLM_KEY" \
     "$REAL_LITELLM_URL/v1/models" || true)"
 else
-  LITELLM_KEY="${LITELLM_KEY:-sk-litellm-local}"
+  LITELLM_KEY="${LITELLM_KEY:-${LITELLM_API_KEY:-sk-litellm-local}}"
 fi
 
 if [[ "$HTTP_CODE" != "200" ]]; then
@@ -240,13 +316,14 @@ echo
 CLEAN_HOME="$(mktemp -d "${TMPDIR:-/tmp}/claude-clean-home.XXXXXX")"
 MERGED_CLAUDE_CONFIG_DIR="$CLEAN_HOME/.claude"
 MERGED_CODEX_CONFIG_DIR="$CLEAN_HOME/.codex"
+MERGED_MCP_CONFIG_PATH="$MERGED_CLAUDE_CONFIG_DIR/claudelitellmmcps.json"
 CONFIG_SOURCE_DIRS=()
 
-append_unique_dir "$REPO_CLAUDE_CONFIG_DIR"
-append_unique_dir "$REPO_CODEX_CONFIG_DIR"
 append_unique_dir "$HOME_CLAUDE_CONFIG_DIR"
 append_unique_dir "$HOME_CODEX_CONFIG_DIR"
 collect_parent_config_dirs "$PWD"
+append_unique_dir "$REPO_CLAUDE_CONFIG_DIR"
+append_unique_dir "$REPO_CODEX_CONFIG_DIR"
 
 for source_dir in "${CONFIG_SOURCE_DIRS[@]}"; do
   case "$(basename "$source_dir")" in
@@ -265,10 +342,20 @@ fi
 
 CLAUDE_CONFIG_DIR="$MERGED_CLAUDE_CONFIG_DIR"
 
+MCP_CONFIG_SOURCE=""
+
 if [[ -n "${MCP_CONFIG_PATH:-}" ]]; then
   RESOLVED_MCP_CONFIG_PATH="$MCP_CONFIG_PATH"
-elif [[ -f "$CLAUDE_CONFIG_DIR/claudelitellmmcps.json" ]]; then
-  RESOLVED_MCP_CONFIG_PATH="$CLAUDE_CONFIG_DIR/claudelitellmmcps.json"
+  MCP_CONFIG_SOURCE="$MCP_CONFIG_PATH"
+elif materialize_mcp_config "$REPO_MCP_CONFIG_PATH" "$MERGED_MCP_CONFIG_PATH"; then
+  RESOLVED_MCP_CONFIG_PATH="$MERGED_MCP_CONFIG_PATH"
+  MCP_CONFIG_SOURCE="$REPO_MCP_CONFIG_PATH"
+elif materialize_mcp_config "$HOME_MCP_CONFIG_PATH" "$MERGED_MCP_CONFIG_PATH"; then
+  RESOLVED_MCP_CONFIG_PATH="$MERGED_MCP_CONFIG_PATH"
+  MCP_CONFIG_SOURCE="$HOME_MCP_CONFIG_PATH"
+elif [[ -f "$MERGED_MCP_CONFIG_PATH" ]]; then
+  RESOLVED_MCP_CONFIG_PATH="$MERGED_MCP_CONFIG_PATH"
+  MCP_CONFIG_SOURCE="$MERGED_MCP_CONFIG_PATH"
 else
   RESOLVED_MCP_CONFIG_PATH=""
 fi
@@ -285,6 +372,8 @@ if [[ -d "$MERGED_CODEX_CONFIG_DIR" ]]; then
 fi
 if [[ -n "${MCP_CONFIG_PATH:-}" ]]; then
   echo "MCP config override:  $MCP_CONFIG_PATH"
+elif [[ -n "$MCP_CONFIG_SOURCE" ]]; then
+  echo "MCP config source:    $MCP_CONFIG_SOURCE"
 fi
 echo
 

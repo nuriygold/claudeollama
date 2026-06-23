@@ -1,6 +1,7 @@
 # claudelitellm
 
 `claudelitellm` is not a stock Claude Code install.
+`claudelitellm` is a local launcher that runs Claude Code against a LiteLLM proxy through a small local filtering proxy.
 
 It is a local launcher that starts Claude Code inside a controlled wrapper:
 
@@ -54,7 +55,7 @@ Practically, treat this environment as a wrapped Claude runtime with special con
 - `python3`
 - `curl`
 - `lsof`
-- a running LiteLLM instance, defaulting to `http://127.0.0.1:4000`
+- `litellm` if you want the launcher to auto-start the repo-local LiteLLM on `http://127.0.0.1:4000`
 
 ## Required configuration concepts
 
@@ -145,6 +146,15 @@ bin/claudelitellm
 ```
 
 You can also run with explicit overrides:
+If `REAL_LITELLM_URL` points at the default local endpoint and nothing is listening on port `4000`, the launcher will try to start LiteLLM itself using:
+
+- `config/litellm.env`
+- `config/litellm.config.yaml`
+
+`bin/bootstrap-claude-config` does this:
+
+- if `~/.claude/claudelitellmmcps.json` exists, it copies that real file into `.claude/claudelitellmmcps.json` for this repo
+- otherwise it seeds `.claude/claudelitellmmcps.json` from the checked-in example
 
 ```bash
 REAL_LITELLM_URL=http://127.0.0.1:4000 \
@@ -154,6 +164,29 @@ bin/claudelitellm
 ```
 
 ## Environment variables
+## LiteLLM config example
+
+The checked-in example config keeps the default `gpt-5.4` model mapping for Azure:
+
+```yaml
+model_list:
+  - model_name: gpt-5.4
+    litellm_params:
+      model: azure/gpt-5.4
+      api_base: os.environ/AZURE_API_BASE
+      api_key: os.environ/AZURE_API_KEY
+      api_version: os.environ/AZURE_API_VERSION
+
+general_settings:
+  master_key: os.environ/LITELLM_MASTER_KEY
+
+litellm_settings:
+  drop_params: true
+```
+
+Copy `config/litellm.config.yaml.example` to `config/litellm.config.yaml` before starting the repo-local LiteLLM instance.
+
+## Environment
 
 Supported variables:
 
@@ -167,6 +200,14 @@ Supported variables:
 - `FILTER_LOG_PATH`
 - `LITELLM_MODELS_OUTPUT`
 - `FILTER_MODELS_OUTPUT`
+
+For launcher auth, export the client key as `LITELLM_KEY` before launch if you are connecting to an already-running LiteLLM that requires auth and you do not want the launcher to prompt.
+
+```bash
+export LITELLM_KEY="<your-litellm-key>"
+```
+
+If your LiteLLM server is configured to require a master key, that server-side config is typically named `LITELLM_MASTER_KEY` in the LiteLLM process configuration.
 
 Default behavior:
 
