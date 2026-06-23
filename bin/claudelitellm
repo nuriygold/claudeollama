@@ -344,9 +344,9 @@ CONFIG_SOURCE_DIRS=()
 
 append_unique_dir "$HOME_CLAUDE_CONFIG_DIR"
 append_unique_dir "$HOME_CODEX_CONFIG_DIR"
-collect_parent_config_dirs "$PWD"
 append_unique_dir "$REPO_CLAUDE_CONFIG_DIR"
 append_unique_dir "$REPO_CODEX_CONFIG_DIR"
+collect_parent_config_dirs "$PWD"
 
 for source_dir in "${CONFIG_SOURCE_DIRS[@]}"; do
   case "$(basename "$source_dir")" in

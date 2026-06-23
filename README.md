@@ -107,7 +107,7 @@ For local operator use, the usual real file is:
 - if `~/.claude/claudelitellmmcps.json` exists, it copies that real file into `.claude/claudelitellmmcps.json` for this repo
 - otherwise it seeds `.claude/claudelitellmmcps.json` from the checked-in example
 
-The repo-local real `.claude/claudelitellmmcps.json` is gitignored so local secrets and auth do not get committed.
+The repo-local real `.claude/claudelitellmmcps.json` is now tracked in this repo so machine-specific clones receive the same MCP config file on pull.
 
 ## Telegram wiring in this build
 
@@ -228,6 +228,14 @@ Default behavior:
 ## Verification
 
 There is no formal test suite today.
+
+Before launch, the wrapper overlays config directories in this order:
+
+- your real `~/.claude` and `~/.codex`
+- this repo's `.claude` and `.codex` if present
+- any `.claude` or `.codex` directories found while walking from `/` down to the current working directory, including this repo's `.claude` when launched from the repo
+
+Later layers win, so project-local config can override home-level defaults.
 
 Primary verification steps:
 
