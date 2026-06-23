@@ -78,8 +78,8 @@ The README documents these local dependencies:
 
 - The launcher is the product. There is no separate library or multi-module app structure here.
 - The embedded Python proxy is generated inside the shell script, so changes to proxy behavior are made in `bin/claudelitellm`, not in a separate Python file.
-- Proxy behavior is intentionally narrow: it strips `output_config` and otherwise forwards headers/body with minimal changes.
-- The proxy binds to `127.0.0.1` only and uses `socketserver.ThreadingTCPServer`.
+- Proxy behavior is intentionally narrow: it strips `output_config`, rejects unexpected `Host` headers, and otherwise forwards headers/body with minimal changes.
+- The proxy binds to `127.0.0.1` only by default, exposes `FILTER_BIND_HOST` and `FILTER_ALLOWED_HOSTS` for explicit overrides, and uses `socketserver.ThreadingTCPServer`.
 - Claude runs with `env -i`, so environment propagation is explicit. If a tool stops working, check whether the required variable is being passed through in the `env -i` block.
 - `GH_CONFIG_DIR` is forwarded from the user environment so GitHub auth can still work inside the clean HOME session.
 - Temporary artifacts are written to `/tmp` or `$TMPDIR` by default: the generated Python proxy, proxy log, LiteLLM model response captures, and the temporary Claude home directory.

@@ -220,7 +220,8 @@ Default behavior:
 - The launcher creates a temporary clean `HOME` specifically so it does not reuse an existing Claude login session.
 - `GH_CONFIG_DIR` is forwarded so GitHub auth can still work inside the clean-home session.
 - Temporary artifacts are written under `/tmp` or `$TMPDIR` unless overridden.
-- The filter proxy binds to `127.0.0.1` only.
+- The filter proxy binds to `127.0.0.1` only by default via `FILTER_BIND_HOST`.
+- The proxy now rejects unexpected `Host` headers; override the allowlist with `FILTER_ALLOWED_HOSTS` only when you intentionally need more than `127.0.0.1`, `localhost`, or the current hostname.
 - Changes to proxy behavior must be made in `bin/claudelitellm` because the proxy script is generated there at runtime.
 - If LiteLLM auth is missing, the launcher stops before the interactive Claude session starts.
 - If MCP servers appear to be missing inside a launched session, check `MCP_CONFIG_PATH` resolution before checking standard Claude local MCP registration.
