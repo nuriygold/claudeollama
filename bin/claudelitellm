@@ -83,6 +83,58 @@ temp_path.replace(canonical_path)
 PY
 }
 
+merge_global_claude_state_into_home() {
+  local canonical_state_path="$1"
+  local merged_state_path="$2"
+
+  python3 - <<'PY' "$canonical_state_path" "$merged_state_path"
+import json
+import pathlib
+import sys
+import tempfile
+
+canonical_path = pathlib.Path(sys.argv[1])
+merged_path = pathlib.Path(sys.argv[2])
+
+if not merged_path.exists():
+    raise SystemExit(0)
+
+try:
+    merged_state = json.loads(merged_path.read_text())
+except Exception as exc:
+    print(f"WARN: Failed to read merged global Claude state for plugin persistence: {exc}", file=sys.stderr)
+    raise SystemExit(0)
+
+try:
+    canonical_state = json.loads(canonical_path.read_text()) if canonical_path.exists() else {}
+except Exception as exc:
+    print(f"WARN: Failed to read canonical global Claude state for plugin persistence: {exc}", file=sys.stderr)
+    raise SystemExit(0)
+
+plugin_related_keys = {
+    "officialMarketplaceAutoInstallAttempted",
+    "officialMarketplaceAutoInstalled",
+}
+
+updated = False
+for key in plugin_related_keys:
+    if key in merged_state and canonical_state.get(key) != merged_state[key]:
+        canonical_state[key] = merged_state[key]
+        updated = True
+
+if not updated:
+    raise SystemExit(0)
+
+canonical_path.parent.mkdir(parents=True, exist_ok=True)
+with tempfile.NamedTemporaryFile("w", dir=canonical_path.parent, delete=False) as handle:
+    temp_path = pathlib.Path(handle.name)
+    json.dump(canonical_state, handle, indent=2)
+    handle.write("\n")
+
+temp_path.replace(canonical_path)
+PY
+}
+
 port_listen_pids() {
   lsof -tiTCP:"$1" -sTCP:LISTEN 2>/dev/null | tr '\n' ' ' | sed 's/[[:space:]]*$//'
 }
@@ -98,6 +150,9 @@ filter_proxy_matches_expected() {
 cleanup() {
   if [[ -n "${CANONICAL_SETTINGS_PATH:-}" && -n "${MERGED_CLAUDE_CONFIG_DIR:-}" ]]; then
     merge_enabled_plugins_into_home_settings "$CANONICAL_SETTINGS_PATH" "$MERGED_CLAUDE_CONFIG_DIR/settings.json"
+  fi
+  if [[ -n "${CANONICAL_CLAUDE_STATE_PATH:-}" && -n "${CLEAN_HOME:-}" ]]; then
+    merge_global_claude_state_into_home "$CANONICAL_CLAUDE_STATE_PATH" "$CLEAN_HOME/.claude.json"
   fi
   if [[ -n "${FILTER_PID:-}" ]]; then
     kill "$FILTER_PID" 2>/dev/null || true
@@ -176,6 +231,7 @@ HOME_CODEX_CONFIG_DIR="$HOME/.codex"
 REPO_CLAUDE_CONFIG_DIR="$REPO_ROOT/.claude"
 REPO_CODEX_CONFIG_DIR="$REPO_ROOT/.codex"
 CANONICAL_SETTINGS_PATH="$HOME_CLAUDE_CONFIG_DIR/settings.json"
+CANONICAL_CLAUDE_STATE_PATH="$HOME/.claude.json"
 HOME_MCP_CONFIG_PATH="$HOME_CLAUDE_CONFIG_DIR/claudelitellmmcps.json"
 REPO_MCP_CONFIG_PATH="$REPO_CLAUDE_CONFIG_DIR/claudelitellmmcps.json"
 LOCAL_LITELLM_CONFIG_PATH="$REPO_ROOT/config/litellm.config.yaml"
