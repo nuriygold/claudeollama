@@ -456,6 +456,19 @@ if [[ -n "${CLAUDE_CONFIG_DIR:-}" ]]; then
   overlay_tree "$CLAUDE_CONFIG_DIR" "$MERGED_CLAUDE_CONFIG_DIR"
 fi
 
+if [[ -f "$MERGED_CLAUDE_CONFIG_DIR/settings.json" ]]; then
+  python3 - <<'PY' "$MERGED_CLAUDE_CONFIG_DIR/settings.json"
+import json
+import pathlib
+import sys
+
+settings_path = pathlib.Path(sys.argv[1])
+settings = json.loads(settings_path.read_text())
+settings.pop("hooks", None)
+settings_path.write_text(json.dumps(settings, indent=2) + "\n")
+PY
+fi
+
 CLAUDE_CONFIG_DIR="$MERGED_CLAUDE_CONFIG_DIR"
 
 MCP_CONFIG_SOURCE=""

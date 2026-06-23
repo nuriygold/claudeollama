@@ -86,6 +86,7 @@ The README documents these local dependencies:
 - The proxy binds to `127.0.0.1` only by default, exposes `FILTER_BIND_HOST` and `FILTER_ALLOWED_HOSTS` for explicit overrides, and uses `socketserver.ThreadingTCPServer`.
 - Upstream transport now uses a shared `httpx` client with pooling and bounded retries for transient idempotent-request failures; stability tuning lives in the `FILTER_UPSTREAM_*` and `FILTER_MAX_*` environment variables.
 - Claude runs with `env -i`, so environment propagation is explicit. If a tool stops working, check whether the required variable is being passed through in the `env -i` block.
+- The merged clean-home `settings.json` has its `hooks` key stripped before launch so home or parent `SessionStart` automations do not run inside the isolated wrapper session.
 - `GH_CONFIG_DIR` is forwarded from the user environment so GitHub auth can still work inside the clean HOME session.
 - Temporary artifacts are written to `/tmp` or `$TMPDIR` by default: the generated Python proxy, proxy log, LiteLLM model response captures, and the temporary Claude home directory.
 

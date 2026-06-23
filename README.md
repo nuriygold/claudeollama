@@ -87,6 +87,8 @@ Later layers win.
 
 This is why repo-local config can override home-level defaults even though Claude is running under a temporary home.
 
+As a stability guard, the launcher strips merged `hooks` from the clean-home `settings.json` before Claude starts. That prevents unrelated `SessionStart` automations from your real home or parent-directory config from firing inside the isolated wrapper session.
+
 ### 3. MCP config for this wrapper
 
 This build has a dedicated MCP config path.
