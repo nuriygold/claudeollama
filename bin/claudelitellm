@@ -33,6 +33,8 @@ require_command python3
 require_command curl
 require_command lsof
 
+REAL_CLAUDE_BIN="$(command -v claude)"
+
 append_unique_dir() {
   local dir="$1"
   [[ -d "$dir" ]] || return 0
@@ -298,11 +300,30 @@ PY
 REAL_LITELLM_URL="$REAL_LITELLM_URL" FILTER_PORT="$FILTER_PORT" \
   python3 "$FILTER_SCRIPT_PATH" > "$FILTER_LOG_PATH" 2>&1 &
 
-FILTER_PID="$!"
-sleep 1
+wait_for_filter_proxy() {
+  local attempt
+  for attempt in {1..20}; do
+    if ! kill -0 "$FILTER_PID" 2>/dev/null; then
+      return 1
+    fi
 
-if ! curl -sS "$FILTER_URL/v1/models" \
-  -H "Authorization: Bearer $LITELLM_KEY" >"$FILTER_MODELS_OUTPUT"; then
+    local code
+    code="$(curl -sS -o "$FILTER_MODELS_OUTPUT" -w "%{http_code}" \
+      -H "Authorization: Bearer $LITELLM_KEY" \
+      "$FILTER_URL/v1/models" || true)"
+    if [[ "$code" == "200" || "$code" == "401" || "$code" == "403" ]]; then
+      return 0
+    fi
+
+    sleep 1
+  done
+
+  return 1
+}
+
+FILTER_PID="$!"
+
+if ! wait_for_filter_proxy; then
   echo "ERROR: Filter proxy did not start correctly."
   echo "Log:"
   cat "$FILTER_LOG_PATH"
@@ -314,6 +335,8 @@ echo "Filter proxy is running. It strips output_config before forwarding to Lite
 echo
 
 CLEAN_HOME="$(mktemp -d "${TMPDIR:-/tmp}/claude-clean-home.XXXXXX")"
+mkdir -p "$CLEAN_HOME/.local/bin"
+ln -sf "$REAL_CLAUDE_BIN" "$CLEAN_HOME/.local/bin/claude"
 MERGED_CLAUDE_CONFIG_DIR="$CLEAN_HOME/.claude"
 MERGED_CODEX_CONFIG_DIR="$CLEAN_HOME/.codex"
 MERGED_MCP_CONFIG_PATH="$MERGED_CLAUDE_CONFIG_DIR/claudelitellmmcps.json"
@@ -396,7 +419,7 @@ env -i \
   LOGNAME="${LOGNAME:-${USER:-claw}}" \
   SHELL="${SHELL:-/bin/zsh}" \
   TERM="${TERM:-xterm-256color}" \
-  PATH="$PATH" \
+  PATH="$CLEAN_HOME/.local/bin:$PATH" \
   PWD="$PWD" \
   TMPDIR="${TMPDIR:-/tmp}" \
   CODEX_HOME="$MERGED_CODEX_CONFIG_DIR" \
