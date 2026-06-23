@@ -225,6 +225,24 @@ echo
 echo "Stopping any old filter proxy on port ${FILTER_PORT}..."
 lsof -tiTCP:"$FILTER_PORT" -sTCP:LISTEN | xargs -r kill 2>/dev/null || true
 
+wait_for_filter_port_release() {
+  local attempt
+  for attempt in {1..20}; do
+    if ! lsof -tiTCP:"$FILTER_PORT" -sTCP:LISTEN >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep 0.25
+  done
+
+  return 1
+}
+
+if ! wait_for_filter_port_release; then
+  echo "ERROR: Port ${FILTER_PORT} is still busy after stopping the old filter proxy."
+  lsof -nP -iTCP:"$FILTER_PORT" -sTCP:LISTEN || true
+  exit 1
+fi
+
 cat > "$FILTER_SCRIPT_PATH" <<'PY'
 import http.server
 import json
@@ -388,7 +406,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
         sys.stderr.write("[filter] " + fmt % args + "\n")
 
 class TightLocalTCPServer(socketserver.ThreadingTCPServer):
-    allow_reuse_address = False
+    allow_reuse_address = True
 
 with TightLocalTCPServer((BIND_HOST, PORT), Handler) as httpd:
     print(

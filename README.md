@@ -236,6 +236,7 @@ Default behavior:
 - The clean-home launch also starts from `env -i`, so inherited wrapper-mode environment from the parent Claude process is not passed through into the nested Claude session.
 - `GH_CONFIG_DIR` is forwarded so GitHub auth can still work inside the clean-home session.
 - Temporary artifacts are written under `/tmp` or `$TMPDIR` unless overridden, and the temp clean home is removed with Python `shutil.rmtree` to avoid noisy macOS `rm` failures on transient npm cache trees.
+- The launcher now waits briefly for `FILTER_PORT` to be released before rebinding, and the embedded TCP server enables address reuse so immediate restarts do not trip over macOS socket teardown timing.
 - The filter proxy binds to `127.0.0.1` only by default via `FILTER_BIND_HOST`.
 - The proxy now rejects unexpected `Host` headers; override the allowlist with `FILTER_ALLOWED_HOSTS` only when you intentionally need more than `127.0.0.1`, `localhost`, or the current hostname.
 - Upstream forwarding now uses a reusable `httpx` client with connection pooling plus bounded retries for transient GET/HEAD/OPTIONS failures; tune it with the `FILTER_UPSTREAM_*` and `FILTER_MAX_*` variables when needed.

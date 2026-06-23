@@ -83,7 +83,7 @@ The README documents these local dependencies:
 - The launcher is the product. There is no separate library or multi-module app structure here.
 - The embedded Python proxy is generated inside the shell script, so changes to proxy behavior are made in `bin/claudelitellm`, not in a separate Python file.
 - Proxy behavior is intentionally narrow: it strips `output_config`, rejects unexpected `Host` headers, and otherwise forwards headers/body with minimal changes.
-- The proxy binds to `127.0.0.1` only by default, exposes `FILTER_BIND_HOST` and `FILTER_ALLOWED_HOSTS` for explicit overrides, and uses `socketserver.ThreadingTCPServer`.
+- The proxy binds to `127.0.0.1` only by default, exposes `FILTER_BIND_HOST` and `FILTER_ALLOWED_HOSTS` for explicit overrides, and uses `socketserver.ThreadingTCPServer` with address reuse enabled plus a short launcher-side port-release wait so immediate restarts do not fail on macOS bind timing.
 - Upstream transport now uses a shared `httpx` client with pooling and bounded retries for transient idempotent-request failures; stability tuning lives in the `FILTER_UPSTREAM_*` and `FILTER_MAX_*` environment variables.
 - Claude runs with `env -i`, so environment propagation is explicit. If a tool stops working, check whether the required variable is being passed through in the `env -i` block.
 - The merged clean-home `settings.json` has its `hooks` key stripped before launch so home or parent `SessionStart` automations do not run inside the isolated wrapper session.
