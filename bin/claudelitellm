@@ -33,6 +33,17 @@ require_command python3
 require_command curl
 require_command lsof
 
+require_python_module() {
+  local module="$1"
+  if ! python3 -c "import ${module}" >/dev/null 2>&1; then
+    echo "ERROR: Required Python module not found: ${module}"
+    echo "Install it with: python3 -m pip install ${module}"
+    exit 1
+  fi
+}
+
+require_python_module httpx
+
 REAL_CLAUDE_BIN="$(command -v claude)"
 
 append_unique_dir() {
@@ -92,6 +103,12 @@ FILTER_SCRIPT_PATH="${FILTER_SCRIPT_PATH:-${TMPDIR:-/tmp}/litellm_strip_output_c
 FILTER_LOG_PATH="${FILTER_LOG_PATH:-${TMPDIR:-/tmp}/litellm-filter.log}"
 LITELLM_MODELS_OUTPUT="${LITELLM_MODELS_OUTPUT:-${TMPDIR:-/tmp}/litellm_models.json}"
 FILTER_MODELS_OUTPUT="${FILTER_MODELS_OUTPUT:-${TMPDIR:-/tmp}/litellm_filter_models.json}"
+FILTER_UPSTREAM_TIMEOUT="${FILTER_UPSTREAM_TIMEOUT:-600}"
+FILTER_UPSTREAM_CONNECT_TIMEOUT="${FILTER_UPSTREAM_CONNECT_TIMEOUT:-10}"
+FILTER_UPSTREAM_RETRIES="${FILTER_UPSTREAM_RETRIES:-2}"
+FILTER_UPSTREAM_RETRY_BACKOFF="${FILTER_UPSTREAM_RETRY_BACKOFF:-0.5}"
+FILTER_MAX_CONNECTIONS="${FILTER_MAX_CONNECTIONS:-100}"
+FILTER_MAX_KEEPALIVE_CONNECTIONS="${FILTER_MAX_KEEPALIVE_CONNECTIONS:-20}"
 
 can_autostart_local_litellm() {
   [[ "$REAL_LITELLM_URL" == "http://127.0.0.1:4000" || "$REAL_LITELLM_URL" == "http://localhost:4000" ]]
@@ -195,13 +212,15 @@ lsof -tiTCP:"$FILTER_PORT" -sTCP:LISTEN | xargs -r kill 2>/dev/null || true
 
 cat > "$FILTER_SCRIPT_PATH" <<'PY'
 import http.server
-import socket
-import socketserver
-import urllib.request
-import urllib.error
 import json
 import os
+import random
+import socket
+import socketserver
 import sys
+import time
+
+import httpx
 
 TARGET = os.environ.get("REAL_LITELLM_URL", "http://127.0.0.1:4000").rstrip("/")
 PORT = int(os.environ.get("FILTER_PORT", "4001"))
@@ -211,6 +230,13 @@ ALLOWED_HOSTS = {
     for host in os.environ.get("FILTER_ALLOWED_HOSTS", f"127.0.0.1,localhost,{socket.gethostname()}").split(",")
     if host.strip()
 }
+CONNECT_TIMEOUT = float(os.environ.get("FILTER_UPSTREAM_CONNECT_TIMEOUT", "10"))
+UPSTREAM_TIMEOUT = float(os.environ.get("FILTER_UPSTREAM_TIMEOUT", "600"))
+UPSTREAM_RETRIES = max(0, int(os.environ.get("FILTER_UPSTREAM_RETRIES", "2")))
+RETRY_BACKOFF = max(0.0, float(os.environ.get("FILTER_UPSTREAM_RETRY_BACKOFF", "0.5")))
+MAX_CONNECTIONS = max(1, int(os.environ.get("FILTER_MAX_CONNECTIONS", "100")))
+MAX_KEEPALIVE_CONNECTIONS = max(1, int(os.environ.get("FILTER_MAX_KEEPALIVE_CONNECTIONS", "20")))
+RETRIABLE_STATUS_CODES = {408, 425, 429, 500, 502, 503, 504}
 
 DROP_KEYS = {
     "output_config",
@@ -222,6 +248,23 @@ def strip_keys(obj):
     if isinstance(obj, list):
         return [strip_keys(x) for x in obj]
     return obj
+
+CLIENT = httpx.Client(
+    timeout=httpx.Timeout(connect=CONNECT_TIMEOUT, read=UPSTREAM_TIMEOUT, write=UPSTREAM_TIMEOUT, pool=CONNECT_TIMEOUT),
+    limits=httpx.Limits(max_connections=MAX_CONNECTIONS, max_keepalive_connections=MAX_KEEPALIVE_CONNECTIONS),
+    follow_redirects=False,
+    http2=False,
+)
+
+def should_retry(method, response=None, error=None):
+    if method.upper() not in {"GET", "HEAD", "OPTIONS"}:
+        return False
+    if error is not None:
+        return isinstance(error, (httpx.ConnectError, httpx.ReadTimeout, httpx.WriteTimeout, httpx.RemoteProtocolError, httpx.PoolTimeout))
+    return response is not None and response.status_code in RETRIABLE_STATUS_CODES
+
+def retry_delay(attempt):
+    return RETRY_BACKOFF * (2 ** attempt) + random.uniform(0.0, 0.1)
 
 class Handler(http.server.BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
@@ -277,43 +320,54 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
         headers["Content-Length"] = str(len(body))
 
-        req = urllib.request.Request(
-            url,
-            data=body if self.command not in {"GET", "HEAD"} else None,
-            headers=headers,
-            method=self.command,
-        )
-
-        try:
-            with urllib.request.urlopen(req, timeout=600) as resp:
-                payload = resp.read()
-                self.send_response(resp.status)
-                for k, v in resp.headers.items():
-                    lk = k.lower()
-                    if lk in {"transfer-encoding", "connection", "content-encoding"}:
-                        continue
-                    self.send_header(k, v)
+        response = None
+        last_error = None
+        for attempt in range(UPSTREAM_RETRIES + 1):
+            try:
+                response = CLIENT.request(
+                    self.command,
+                    url,
+                    content=body if self.command not in {"GET", "HEAD"} else None,
+                    headers=headers,
+                )
+                if should_retry(self.command, response=response) and attempt < UPSTREAM_RETRIES:
+                    response.close()
+                    time.sleep(retry_delay(attempt))
+                    continue
+                break
+            except httpx.HTTPError as error:
+                last_error = error
+                if should_retry(self.command, error=error) and attempt < UPSTREAM_RETRIES:
+                    time.sleep(retry_delay(attempt))
+                    continue
+                payload = json.dumps({"error": str(error)}).encode()
+                self.send_response(502)
+                self.send_header("Content-Type", "application/json")
                 self.send_header("Content-Length", str(len(payload)))
                 self.end_headers()
                 self.wfile.write(payload)
-        except urllib.error.HTTPError as e:
-            payload = e.read()
-            self.send_response(e.code)
-            for k, v in e.headers.items():
-                lk = k.lower()
-                if lk in {"transfer-encoding", "connection", "content-encoding"}:
-                    continue
-                self.send_header(k, v)
-            self.send_header("Content-Length", str(len(payload)))
-            self.end_headers()
-            self.wfile.write(payload)
-        except Exception as e:
-            payload = json.dumps({"error": str(e)}).encode()
+                return
+
+        if response is None:
+            payload = json.dumps({"error": str(last_error or "unknown upstream error")}).encode()
             self.send_response(502)
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(payload)))
             self.end_headers()
             self.wfile.write(payload)
+            return
+
+        payload = response.content
+        self.send_response(response.status_code)
+        for k, v in response.headers.items():
+            lk = k.lower()
+            if lk in {"transfer-encoding", "connection", "content-encoding"}:
+                continue
+            self.send_header(k, v)
+        self.send_header("Content-Length", str(len(payload)))
+        self.end_headers()
+        self.wfile.write(payload)
+        response.close()
 
     def log_message(self, fmt, *args):
         sys.stderr.write("[filter] " + fmt % args + "\n")
@@ -322,11 +376,21 @@ class TightLocalTCPServer(socketserver.ThreadingTCPServer):
     allow_reuse_address = False
 
 with TightLocalTCPServer((BIND_HOST, PORT), Handler) as httpd:
-    print(f"Filtering proxy listening on http://{BIND_HOST}:{PORT} → {TARGET} (allowed hosts: {', '.join(sorted(ALLOWED_HOSTS))})", flush=True)
+    print(
+        f"Filtering proxy listening on http://{BIND_HOST}:{PORT} → {TARGET} "
+        f"(allowed hosts: {', '.join(sorted(ALLOWED_HOSTS))}; retries: {UPSTREAM_RETRIES}; max_connections: {MAX_CONNECTIONS})",
+        flush=True,
+    )
     httpd.serve_forever()
 PY
 
 REAL_LITELLM_URL="$REAL_LITELLM_URL" FILTER_PORT="$FILTER_PORT" \
+FILTER_UPSTREAM_TIMEOUT="$FILTER_UPSTREAM_TIMEOUT" \
+FILTER_UPSTREAM_CONNECT_TIMEOUT="$FILTER_UPSTREAM_CONNECT_TIMEOUT" \
+FILTER_UPSTREAM_RETRIES="$FILTER_UPSTREAM_RETRIES" \
+FILTER_UPSTREAM_RETRY_BACKOFF="$FILTER_UPSTREAM_RETRY_BACKOFF" \
+FILTER_MAX_CONNECTIONS="$FILTER_MAX_CONNECTIONS" \
+FILTER_MAX_KEEPALIVE_CONNECTIONS="$FILTER_MAX_KEEPALIVE_CONNECTIONS" \
   python3 "$FILTER_SCRIPT_PATH" > "$FILTER_LOG_PATH" 2>&1 &
 
 wait_for_filter_proxy() {

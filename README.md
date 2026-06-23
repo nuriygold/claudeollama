@@ -53,6 +53,7 @@ Practically, treat this environment as a wrapped Claude runtime with special con
 
 - `claude`
 - `python3`
+- Python package `httpx` for the local filter proxy transport (`python3 -m pip install httpx`)
 - `curl`
 - `lsof`
 - `litellm` if you want the launcher to auto-start the repo-local LiteLLM on `http://127.0.0.1:4000`
@@ -200,6 +201,12 @@ Supported variables:
 - `FILTER_LOG_PATH`
 - `LITELLM_MODELS_OUTPUT`
 - `FILTER_MODELS_OUTPUT`
+- `FILTER_UPSTREAM_TIMEOUT`
+- `FILTER_UPSTREAM_CONNECT_TIMEOUT`
+- `FILTER_UPSTREAM_RETRIES`
+- `FILTER_UPSTREAM_RETRY_BACKOFF`
+- `FILTER_MAX_CONNECTIONS`
+- `FILTER_MAX_KEEPALIVE_CONNECTIONS`
 
 For launcher auth, export the client key as `LITELLM_KEY` before launch if you are connecting to an already-running LiteLLM that requires auth and you do not want the launcher to prompt.
 
@@ -222,6 +229,7 @@ Default behavior:
 - Temporary artifacts are written under `/tmp` or `$TMPDIR` unless overridden.
 - The filter proxy binds to `127.0.0.1` only by default via `FILTER_BIND_HOST`.
 - The proxy now rejects unexpected `Host` headers; override the allowlist with `FILTER_ALLOWED_HOSTS` only when you intentionally need more than `127.0.0.1`, `localhost`, or the current hostname.
+- Upstream forwarding now uses a reusable `httpx` client with connection pooling plus bounded retries for transient GET/HEAD/OPTIONS failures; tune it with the `FILTER_UPSTREAM_*` and `FILTER_MAX_*` variables when needed.
 - Changes to proxy behavior must be made in `bin/claudelitellm` because the proxy script is generated there at runtime.
 - If LiteLLM auth is missing, the launcher stops before the interactive Claude session starts.
 - If MCP servers appear to be missing inside a launched session, check `MCP_CONFIG_PATH` resolution before checking standard Claude local MCP registration.
