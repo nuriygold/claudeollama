@@ -475,8 +475,6 @@ if [[ -z "${FILTER_PID:-}" ]]; then
   echo "Filter proxy is already running. Reusing the existing listener."
   echo
 else
-  FILTER_PID="$!"
-
   if ! wait_for_filter_proxy; then
     echo "ERROR: Filter proxy did not start correctly."
     echo "Log:"
@@ -586,6 +584,10 @@ if [[ $# -gt 0 ]]; then
   CLAUDE_BIN_ARGS=("$@")
 fi
 
+if [[ -n "${CLAUDE_CODE_CHILD_SESSION:-}" || -n "${CLAUDECODE:-}" ]]; then
+  echo "Detected nested Claude session environment. Launching child Claude without inherited print-mode session state."
+fi
+
 env -i \
   HOME="$CLEAN_HOME" \
   USER="${USER:-claw}" \
@@ -602,4 +604,9 @@ env -i \
   ANTHROPIC_AUTH_TOKEN="$LITELLM_KEY" \
   ANTHROPIC_MODEL="$MODEL" \
   ANTHROPIC_SMALL_FAST_MODEL="$MODEL" \
-  claude "${CLAUDE_ARGS[@]}" "${CLAUDE_BIN_ARGS[@]}"
+  CLAUDECODE= \
+  CLAUDE_CODE_CHILD_SESSION= \
+  CLAUDE_CODE_SESSION_ID= \
+  CLAUDE_CODE_ENTRYPOINT= \
+  CLAUDE_CODE_EXECPATH= \
+  claude "${CLAUDE_ARGS[@]}" ${CLAUDE_BIN_ARGS[@]+"${CLAUDE_BIN_ARGS[@]}"}
