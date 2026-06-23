@@ -27,6 +27,62 @@ if path.exists():
 PY
 }
 
+merge_enabled_plugins_into_home_settings() {
+  local canonical_settings_path="$1"
+  local merged_settings_path="$2"
+
+  python3 - <<'PY' "$canonical_settings_path" "$merged_settings_path"
+import json
+import pathlib
+import sys
+import tempfile
+
+canonical_path = pathlib.Path(sys.argv[1])
+merged_path = pathlib.Path(sys.argv[2])
+
+if not merged_path.exists():
+    raise SystemExit(0)
+
+try:
+    merged_settings = json.loads(merged_path.read_text())
+except Exception as exc:
+    print(f"WARN: Failed to read merged settings for plugin persistence: {exc}", file=sys.stderr)
+    raise SystemExit(0)
+
+try:
+    canonical_settings = json.loads(canonical_path.read_text()) if canonical_path.exists() else {}
+except Exception as exc:
+    print(f"WARN: Failed to read canonical settings for plugin persistence: {exc}", file=sys.stderr)
+    raise SystemExit(0)
+
+canonical_plugins = canonical_settings.get("enabledPlugins")
+if not isinstance(canonical_plugins, dict):
+    canonical_plugins = {}
+
+merged_plugins = merged_settings.get("enabledPlugins")
+if not isinstance(merged_plugins, dict):
+    merged_plugins = {}
+
+normalized_plugins = dict(canonical_plugins)
+for key, value in merged_plugins.items():
+    normalized_plugins[key] = value
+    if key.endswith("@claude-plugins-official"):
+        normalized_plugins[key.rsplit("@", 1)[0]] = value
+
+if canonical_settings.get("enabledPlugins") == normalized_plugins:
+    raise SystemExit(0)
+
+canonical_settings["enabledPlugins"] = normalized_plugins
+canonical_path.parent.mkdir(parents=True, exist_ok=True)
+with tempfile.NamedTemporaryFile("w", dir=canonical_path.parent, delete=False) as handle:
+    temp_path = pathlib.Path(handle.name)
+    json.dump(canonical_settings, handle, indent=2)
+    handle.write("\n")
+
+temp_path.replace(canonical_path)
+PY
+}
+
 port_listen_pids() {
   lsof -tiTCP:"$1" -sTCP:LISTEN 2>/dev/null | tr '\n' ' ' | sed 's/[[:space:]]*$//'
 }
@@ -40,6 +96,9 @@ filter_proxy_matches_expected() {
 }
 
 cleanup() {
+  if [[ -n "${CANONICAL_SETTINGS_PATH:-}" && -n "${MERGED_CLAUDE_CONFIG_DIR:-}" ]]; then
+    merge_enabled_plugins_into_home_settings "$CANONICAL_SETTINGS_PATH" "$MERGED_CLAUDE_CONFIG_DIR/settings.json"
+  fi
   if [[ -n "${FILTER_PID:-}" ]]; then
     kill "$FILTER_PID" 2>/dev/null || true
     wait "$FILTER_PID" 2>/dev/null || true
@@ -116,6 +175,7 @@ HOME_CLAUDE_CONFIG_DIR="$HOME/.claude"
 HOME_CODEX_CONFIG_DIR="$HOME/.codex"
 REPO_CLAUDE_CONFIG_DIR="$REPO_ROOT/.claude"
 REPO_CODEX_CONFIG_DIR="$REPO_ROOT/.codex"
+CANONICAL_SETTINGS_PATH="$HOME_CLAUDE_CONFIG_DIR/settings.json"
 HOME_MCP_CONFIG_PATH="$HOME_CLAUDE_CONFIG_DIR/claudelitellmmcps.json"
 REPO_MCP_CONFIG_PATH="$REPO_CLAUDE_CONFIG_DIR/claudelitellmmcps.json"
 LOCAL_LITELLM_CONFIG_PATH="$REPO_ROOT/config/litellm.config.yaml"
