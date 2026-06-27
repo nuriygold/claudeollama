@@ -11,7 +11,7 @@ Use this file as the Codex-facing repo instruction stub.
 <claude-mem-context>
 # Memory Context
 
-# [claudelitellm] recent context, 2026-05-21 5:35am PDT
+# [claudeollama] recent context, 2026-06-27 2:16pm PDT
 
 No previous sessions found.
 </claude-mem-context>
