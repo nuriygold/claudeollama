@@ -1,0 +1,11 @@
+model_list:
+  - model_name: gpt-oss:20b
+    litellm_params:
+      model: ollama_chat/gpt-oss:20b
+      api_base: http://127.0.0.1:11434
+      keep_alive: 8m
+    model_info:
+      supports_function_calling: true
+
+litellm_settings:
+  drop_params: true

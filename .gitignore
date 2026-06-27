@@ -1,10 +1,12 @@
 config/*.local.*
 config/*.secret.*
-config/litellm.config.yaml
+config/ollama.config.yaml
+!config/ollama.config.yaml
 .env
 .env.*
 *.log
 .DS_Store
-.config/claudelitellm/*.env
+.config/claudeollama/*.env
 *.env
+!config/ollama.env
 .claude/settings.local.json

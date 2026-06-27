@@ -4,15 +4,15 @@ set -euo pipefail
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd -- "$SCRIPT_DIR/.." && pwd)"
 REPO_CLAUDE_DIR="$REPO_ROOT/.claude"
-HOME_MCP_CONFIG="$HOME/.claude/claudelitellmmcps.json"
-REPO_MCP_CONFIG="$REPO_CLAUDE_DIR/claudelitellmmcps.json"
-EXAMPLE_MCP_CONFIG="$REPO_CLAUDE_DIR/claudelitellmmcps.json.example"
+HOME_MCP_CONFIG="$HOME/.claude/claudeollamamcps.json"
+REPO_MCP_CONFIG="$REPO_CLAUDE_DIR/claudeollamamcps.json"
+EXAMPLE_MCP_CONFIG="$REPO_CLAUDE_DIR/claudeollamamcps.json.example"
 
 mkdir -p "$REPO_CLAUDE_DIR"
 
 if [[ -f "$HOME_MCP_CONFIG" ]]; then
   echo "Home MCP config already exists at $HOME_MCP_CONFIG"
-  echo "claudelitellm now prefers that home config over the repo-local file."
+  echo "claudeollama now prefers that home config over the repo-local file."
   echo "Use MCP_CONFIG_PATH if you need an explicit override."
   exit 0
 fi

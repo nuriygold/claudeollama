@@ -1,7 +1,13 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+SOURCE_PATH="${BASH_SOURCE[0]}"
+while [[ -L "$SOURCE_PATH" ]]; do
+  SOURCE_DIR="$(cd -- "$(dirname -- "$SOURCE_PATH")" && pwd)"
+  SOURCE_PATH="$(readlink "$SOURCE_PATH")"
+  [[ "$SOURCE_PATH" == /* ]] || SOURCE_PATH="$SOURCE_DIR/$SOURCE_PATH"
+done
+SCRIPT_DIR="$(cd -- "$(dirname -- "$SOURCE_PATH")" && pwd)"
 REPO_ROOT="$(cd -- "$SCRIPT_DIR/.." && pwd)"
 
 require_command() {
@@ -27,19 +33,129 @@ if path.exists():
 PY
 }
 
-port_listen_pids() {
-  lsof -tiTCP:"$1" -sTCP:LISTEN 2>/dev/null | tr '\n' ' ' | sed 's/[[:space:]]*$//'
+merge_enabled_plugins_into_home_settings() {
+  local canonical_settings_path="$1"
+  local merged_settings_path="$2"
+
+  python3 - <<'PY' "$canonical_settings_path" "$merged_settings_path"
+import json
+import pathlib
+import sys
+import tempfile
+
+canonical_path = pathlib.Path(sys.argv[1])
+merged_path = pathlib.Path(sys.argv[2])
+
+if not merged_path.exists():
+    raise SystemExit(0)
+
+try:
+    merged_settings = json.loads(merged_path.read_text())
+except Exception as exc:
+    print(f"WARN: Failed to read merged settings for plugin persistence: {exc}", file=sys.stderr)
+    raise SystemExit(0)
+
+try:
+    canonical_settings = json.loads(canonical_path.read_text()) if canonical_path.exists() else {}
+except Exception as exc:
+    print(f"WARN: Failed to read canonical settings for plugin persistence: {exc}", file=sys.stderr)
+    raise SystemExit(0)
+
+canonical_plugins = canonical_settings.get("enabledPlugins")
+if not isinstance(canonical_plugins, dict):
+    canonical_plugins = {}
+
+merged_plugins = merged_settings.get("enabledPlugins")
+if not isinstance(merged_plugins, dict):
+    merged_plugins = {}
+
+normalized_plugins = dict(canonical_plugins)
+for key, value in merged_plugins.items():
+    normalized_plugins[key] = value
+    if key.endswith("@claude-plugins-official"):
+        normalized_plugins[key.rsplit("@", 1)[0]] = value
+
+if canonical_settings.get("enabledPlugins") == normalized_plugins:
+    raise SystemExit(0)
+
+canonical_settings["enabledPlugins"] = normalized_plugins
+canonical_path.parent.mkdir(parents=True, exist_ok=True)
+with tempfile.NamedTemporaryFile("w", dir=canonical_path.parent, delete=False) as handle:
+    temp_path = pathlib.Path(handle.name)
+    json.dump(canonical_settings, handle, indent=2)
+    handle.write("\n")
+
+temp_path.replace(canonical_path)
+PY
 }
 
-filter_proxy_matches_expected() {
-  local code
-  code="$(curl -sS -o "$FILTER_MODELS_OUTPUT" -w "%{http_code}" \
-    -H "Authorization: Bearer $LITELLM_KEY" \
-    "$FILTER_URL/v1/models" || true)"
-  [[ "$code" == "200" || "$code" == "401" || "$code" == "403" ]]
+merge_global_claude_state_into_home() {
+  local canonical_state_path="$1"
+  local merged_state_path="$2"
+
+  python3 - <<'PY' "$canonical_state_path" "$merged_state_path"
+import json
+import pathlib
+import sys
+import tempfile
+
+canonical_path = pathlib.Path(sys.argv[1])
+merged_path = pathlib.Path(sys.argv[2])
+
+if not merged_path.exists():
+    raise SystemExit(0)
+
+try:
+    merged_state = json.loads(merged_path.read_text())
+except Exception as exc:
+    print(f"WARN: Failed to read merged global Claude state for plugin persistence: {exc}", file=sys.stderr)
+    raise SystemExit(0)
+
+try:
+    canonical_state = json.loads(canonical_path.read_text()) if canonical_path.exists() else {}
+except Exception as exc:
+    print(f"WARN: Failed to read canonical global Claude state for plugin persistence: {exc}", file=sys.stderr)
+    raise SystemExit(0)
+
+plugin_related_keys = {
+    "officialMarketplaceAutoInstallAttempted",
+    "officialMarketplaceAutoInstalled",
+}
+
+updated = False
+for key in plugin_related_keys:
+    if key in merged_state and canonical_state.get(key) != merged_state[key]:
+        canonical_state[key] = merged_state[key]
+        updated = True
+
+if not updated:
+    raise SystemExit(0)
+
+canonical_path.parent.mkdir(parents=True, exist_ok=True)
+with tempfile.NamedTemporaryFile("w", dir=canonical_path.parent, delete=False) as handle:
+    temp_path = pathlib.Path(handle.name)
+    json.dump(canonical_state, handle, indent=2)
+    handle.write("\n")
+
+temp_path.replace(canonical_path)
+PY
+}
+
+port_listen_pids() {
+  lsof -tiTCP:"$1" -sTCP:LISTEN 2>/dev/null | tr '\n' ' ' | sed 's/[[:space:]]*$//' || true
+}
+
+filter_port_listening() {
+  lsof -tiTCP:"$FILTER_PORT" -sTCP:LISTEN >/dev/null 2>&1
 }
 
 cleanup() {
+  if [[ -n "${CANONICAL_SETTINGS_PATH:-}" && -n "${MERGED_CLAUDE_CONFIG_DIR:-}" ]]; then
+    merge_enabled_plugins_into_home_settings "$CANONICAL_SETTINGS_PATH" "$MERGED_CLAUDE_CONFIG_DIR/settings.json"
+  fi
+  if [[ -n "${CANONICAL_CLAUDE_STATE_PATH:-}" && -n "${CLEAN_HOME:-}" ]]; then
+    merge_global_claude_state_into_home "$CANONICAL_CLAUDE_STATE_PATH" "$CLEAN_HOME/.claude.json"
+  fi
   if [[ -n "${FILTER_PID:-}" ]]; then
     kill "$FILTER_PID" 2>/dev/null || true
     wait "$FILTER_PID" 2>/dev/null || true
@@ -85,106 +201,45 @@ append_unique_dir() {
   CONFIG_SOURCE_DIRS+=("$dir")
 }
 
-collect_parent_config_dirs() {
-  local dir="$1"
-  local chain=()
-
-  while [[ "$dir" != "/" ]]; do
-    chain+=("$dir")
-    dir="$(dirname "$dir")"
-  done
-  chain+=("/")
-
-  local idx
-  for (( idx=${#chain[@]}-1; idx>=0; idx-- )); do
-    append_unique_dir "${chain[$idx]}/.claude"
-    append_unique_dir "${chain[$idx]}/.codex"
-  done
-}
-
-overlay_tree() {
+overlay_selected_files() {
   local src="$1"
   local dst="$2"
+  shift 2
 
   [[ -d "$src" ]] || return 0
   mkdir -p "$dst"
-  chmod -R u+w "$dst" 2>/dev/null || true
-  ditto "$src" "$dst"
+
+  local rel_path
+  for rel_path in "$@"; do
+    [[ -f "$src/$rel_path" ]] || continue
+    mkdir -p "$(dirname "$dst/$rel_path")"
+    cp -p "$src/$rel_path" "$dst/$rel_path"
+  done
 }
 
 HOME_CLAUDE_CONFIG_DIR="$HOME/.claude"
-HOME_CODEX_CONFIG_DIR="$HOME/.codex"
 REPO_CLAUDE_CONFIG_DIR="$REPO_ROOT/.claude"
-REPO_CODEX_CONFIG_DIR="$REPO_ROOT/.codex"
-HOME_MCP_CONFIG_PATH="$HOME_CLAUDE_CONFIG_DIR/claudelitellmmcps.json"
-REPO_MCP_CONFIG_PATH="$REPO_CLAUDE_CONFIG_DIR/claudelitellmmcps.json"
-LOCAL_LITELLM_CONFIG_PATH="$REPO_ROOT/config/litellm.config.yaml"
-LOCAL_LITELLM_ENV_PATH="$REPO_ROOT/config/litellm.env"
-REAL_LITELLM_URL="${REAL_LITELLM_URL:-http://127.0.0.1:4000}"
-FILTER_PORT="${FILTER_PORT:-4001}"
+EXPLICIT_CLAUDE_CONFIG_DIR="${CLAUDE_CONFIG_DIR:-}"
+CANONICAL_SETTINGS_PATH="$HOME_CLAUDE_CONFIG_DIR/settings.json"
+CANONICAL_CLAUDE_STATE_PATH="$HOME/.claude.json"
+HOME_MCP_CONFIG_PATH="$HOME_CLAUDE_CONFIG_DIR/claudeollamamcps.json"
+REPO_MCP_CONFIG_PATH="$REPO_CLAUDE_CONFIG_DIR/claudeollamamcps.json"
+LOCAL_LITELLM_CONFIG_PATH="$REPO_ROOT/config/ollama.config.yaml"
+LOCAL_LITELLM_ENV_PATH="$REPO_ROOT/config/ollama.env"
+REAL_LITELLM_URL="${REAL_LITELLM_URL:-http://127.0.0.1:4300}"
+FILTER_PORT="${FILTER_PORT:-4301}"
 FILTER_URL="http://127.0.0.1:${FILTER_PORT}"
-MODEL="${ANTHROPIC_MODEL:-gpt-5.4}"
-LOCAL_LITELLM_LOG_PATH="${LOCAL_LITELLM_LOG_PATH:-${TMPDIR:-/tmp}/litellm-local.log}"
+MODEL="${ANTHROPIC_MODEL:-gpt-oss:20b}"
+LOCAL_LITELLM_LOG_PATH="${LOCAL_LITELLM_LOG_PATH:-${TMPDIR:-/tmp}/claudeollama-local.log}"
 
-FILTER_SCRIPT_PATH="${FILTER_SCRIPT_PATH:-${TMPDIR:-/tmp}/litellm_strip_output_config_proxy.py}"
-FILTER_LOG_PATH="${FILTER_LOG_PATH:-${TMPDIR:-/tmp}/litellm-filter.log}"
-LITELLM_MODELS_OUTPUT="${LITELLM_MODELS_OUTPUT:-${TMPDIR:-/tmp}/litellm_models.json}"
-FILTER_MODELS_OUTPUT="${FILTER_MODELS_OUTPUT:-${TMPDIR:-/tmp}/litellm_filter_models.json}"
+FILTER_SCRIPT_PATH="${FILTER_SCRIPT_PATH:-${TMPDIR:-/tmp}/claudeollama_strip_output_config_proxy.py}"
+FILTER_LOG_PATH="${FILTER_LOG_PATH:-${TMPDIR:-/tmp}/claudeollama-filter.log}"
 FILTER_UPSTREAM_TIMEOUT="${FILTER_UPSTREAM_TIMEOUT:-600}"
 FILTER_UPSTREAM_CONNECT_TIMEOUT="${FILTER_UPSTREAM_CONNECT_TIMEOUT:-10}"
 FILTER_UPSTREAM_RETRIES="${FILTER_UPSTREAM_RETRIES:-2}"
 FILTER_UPSTREAM_RETRY_BACKOFF="${FILTER_UPSTREAM_RETRY_BACKOFF:-0.5}"
 FILTER_MAX_CONNECTIONS="${FILTER_MAX_CONNECTIONS:-100}"
 FILTER_MAX_KEEPALIVE_CONNECTIONS="${FILTER_MAX_KEEPALIVE_CONNECTIONS:-20}"
-
-can_autostart_local_litellm() {
-  [[ "$REAL_LITELLM_URL" == "http://127.0.0.1:4000" || "$REAL_LITELLM_URL" == "http://localhost:4000" ]]
-}
-
-load_local_litellm_env() {
-  [[ -f "$LOCAL_LITELLM_ENV_PATH" ]] || return 1
-  set -a
-  # shellcheck disable=SC1090
-  source "$LOCAL_LITELLM_ENV_PATH"
-  set +a
-}
-
-start_local_litellm() {
-  [[ -f "$LOCAL_LITELLM_CONFIG_PATH" ]] || return 1
-  [[ -f "$LOCAL_LITELLM_ENV_PATH" ]] || return 1
-  require_command litellm
-
-  echo "LiteLLM is down at $REAL_LITELLM_URL."
-  echo "Starting the repo-local LiteLLM on port 4000..."
-
-  load_local_litellm_env
-  LITELLM_KEY="${LITELLM_KEY:-${LITELLM_API_KEY:-${LITELLM_MASTER_KEY:-}}}"
-
-  : >"$LOCAL_LITELLM_LOG_PATH"
-  (
-    cd "$REPO_ROOT"
-    litellm --host 127.0.0.1 --port 4000 --config "$LOCAL_LITELLM_CONFIG_PATH"
-  ) >"$LOCAL_LITELLM_LOG_PATH" 2>&1 &
-  LITELLM_PID="$!"
-
-  local attempt
-  for attempt in {1..20}; do
-    local code
-    code="$(curl -sS -o "$LITELLM_MODELS_OUTPUT" -w "%{http_code}" "$REAL_LITELLM_URL/v1/models" || true)"
-    if [[ "$code" == "200" || "$code" == "401" || "$code" == "403" ]]; then
-      return 0
-    fi
-    if ! kill -0 "$LITELLM_PID" 2>/dev/null; then
-      break
-    fi
-    sleep 1
-  done
-
-  echo "ERROR: Local LiteLLM did not start correctly."
-  echo "Log:"
-  cat "$LOCAL_LITELLM_LOG_PATH"
-  exit 1
-}
 
 materialize_mcp_config() {
   local src="$1"
@@ -195,49 +250,95 @@ materialize_mcp_config() {
   cp -fL "$src" "$dst"
 }
 
-echo "=== Claude Code → filter proxy → existing LiteLLM → Azure ${MODEL} ==="
+is_local_litellm_url() {
+  case "$1" in
+    http://127.0.0.1:*|http://localhost:*|http://[::1]:*)
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+start_local_litellm() {
+  local target_url="$1"
+  local config_path="$2"
+  local env_path="$3"
+
+  if [[ -n "${LITELLM_PID:-}" ]]; then
+    return 0
+  fi
+
+  if ! is_local_litellm_url "$target_url"; then
+    return 0
+  fi
+
+  if lsof -tiTCP:"${target_url##*:}" -sTCP:LISTEN >/dev/null 2>&1; then
+    echo "Local LiteLLM is already listening on ${target_url}."
+    echo
+    return 0
+  fi
+
+  if [[ ! -f "$config_path" ]]; then
+    echo "ERROR: Expected LiteLLM config not found: $config_path"
+    exit 1
+  fi
+
+  echo "Starting local LiteLLM on ${target_url}..."
+  echo "Config: $config_path"
+  if [[ -f "$env_path" ]]; then
+    echo "Env:    $env_path"
+  fi
+  echo "Log:    $LOCAL_LITELLM_LOG_PATH"
+  echo
+
+  (
+    if [[ -f "$env_path" ]]; then
+      set -a
+      source "$env_path"
+      set +a
+    fi
+    exec litellm --host 127.0.0.1 --port "${target_url##*:}" --config "$config_path"
+  ) > "$LOCAL_LITELLM_LOG_PATH" 2>&1 &
+  LITELLM_PID="$!"
+
+  local attempt
+  for attempt in {1..40}; do
+    if ! kill -0 "$LITELLM_PID" 2>/dev/null; then
+      echo "ERROR: Local LiteLLM exited before it became ready."
+      echo "Log:"
+      cat "$LOCAL_LITELLM_LOG_PATH"
+      exit 1
+    fi
+
+    if lsof -tiTCP:"${target_url##*:}" -sTCP:LISTEN >/dev/null 2>&1; then
+      echo "Local LiteLLM is listening on ${target_url}."
+      echo
+      return 0
+    fi
+
+    sleep 0.5
+  done
+
+  echo "ERROR: Local LiteLLM did not become ready on ${target_url}."
+  echo "Log:"
+  cat "$LOCAL_LITELLM_LOG_PATH"
+  exit 1
+}
+
+echo "=== claudeollama → filter proxy → local LiteLLM → Ollama ${MODEL} ==="
 echo "Real LiteLLM: $REAL_LITELLM_URL"
 echo "Filter URL:   $FILTER_URL"
 echo "Model:        $MODEL"
 echo
 
-echo "Checking existing LiteLLM..."
-HTTP_CODE="$(curl -sS -o "$LITELLM_MODELS_OUTPUT" -w "%{http_code}" "$REAL_LITELLM_URL/v1/models" || true)"
-
-if [[ "$HTTP_CODE" == "000" ]] && can_autostart_local_litellm; then
-  start_local_litellm
-  HTTP_CODE="$(curl -sS -o "$LITELLM_MODELS_OUTPUT" -w "%{http_code}" "$REAL_LITELLM_URL/v1/models" || true)"
-fi
-
-if [[ "$HTTP_CODE" == "401" || "$HTTP_CODE" == "403" ]]; then
-  LITELLM_KEY="${LITELLM_KEY:-${LITELLM_API_KEY:-}}"
-  if [[ -z "$LITELLM_KEY" ]]; then
-    echo "LiteLLM requires a key."
-    read -r -s -p "Paste your LiteLLM key: " LITELLM_KEY
-    echo
-  fi
-  HTTP_CODE="$(curl -sS -o "$LITELLM_MODELS_OUTPUT" -w "%{http_code}" \
-    -H "Authorization: Bearer $LITELLM_KEY" \
-    "$REAL_LITELLM_URL/v1/models" || true)"
-else
-  LITELLM_KEY="${LITELLM_KEY:-${LITELLM_API_KEY:-sk-litellm-local}}"
-fi
-
-if [[ "$HTTP_CODE" != "200" ]]; then
-  echo "ERROR: Existing LiteLLM is not reachable or did not accept auth."
-  echo "HTTP status: $HTTP_CODE"
-  echo "Expected: $REAL_LITELLM_URL/v1/models"
-  exit 1
-fi
-
-echo
-echo "Confirmed LiteLLM is reachable."
-echo
+start_local_litellm "$REAL_LITELLM_URL" "$LOCAL_LITELLM_CONFIG_PATH" "$LOCAL_LITELLM_ENV_PATH"
 
 EXISTING_FILTER_PIDS="$(port_listen_pids "$FILTER_PORT")"
 if [[ -n "$EXISTING_FILTER_PIDS" ]]; then
   echo "Found existing listener on port ${FILTER_PORT}: ${EXISTING_FILTER_PIDS}"
-  if filter_proxy_matches_expected; then
+  if filter_port_listening; then
     echo "Reusing the existing filter proxy on port ${FILTER_PORT}."
     FILTER_PID=""
   else
@@ -278,8 +379,8 @@ import time
 
 import httpx
 
-TARGET = os.environ.get("REAL_LITELLM_URL", "http://127.0.0.1:4000").rstrip("/")
-PORT = int(os.environ.get("FILTER_PORT", "4001"))
+TARGET = os.environ.get("REAL_LITELLM_URL", "http://127.0.0.1:4300").rstrip("/")
+PORT = int(os.environ.get("FILTER_PORT", "4301"))
 BIND_HOST = os.environ.get("FILTER_BIND_HOST", "127.0.0.1")
 ALLOWED_HOSTS = {
     host.strip()
@@ -457,11 +558,7 @@ wait_for_filter_proxy() {
       return 1
     fi
 
-    local code
-    code="$(curl -sS -o "$FILTER_MODELS_OUTPUT" -w "%{http_code}" \
-      -H "Authorization: Bearer $LITELLM_KEY" \
-      "$FILTER_URL/v1/models" || true)"
-    if [[ "$code" == "200" || "$code" == "401" || "$code" == "403" ]]; then
+    if filter_port_listening; then
       return 0
     fi
 
@@ -491,29 +588,50 @@ CLEAN_HOME="$(mktemp -d "${TMPDIR:-/tmp}/claude-clean-home.XXXXXX")"
 mkdir -p "$CLEAN_HOME/.local/bin"
 ln -sf "$REAL_CLAUDE_BIN" "$CLEAN_HOME/.local/bin/claude"
 MERGED_CLAUDE_CONFIG_DIR="$CLEAN_HOME/.claude"
-MERGED_CODEX_CONFIG_DIR="$CLEAN_HOME/.codex"
-MERGED_MCP_CONFIG_PATH="$MERGED_CLAUDE_CONFIG_DIR/claudelitellmmcps.json"
+MERGED_MCP_CONFIG_PATH="$MERGED_CLAUDE_CONFIG_DIR/claudeollamamcps.json"
 CONFIG_SOURCE_DIRS=()
 
-append_unique_dir "$HOME_CLAUDE_CONFIG_DIR"
-append_unique_dir "$HOME_CODEX_CONFIG_DIR"
 append_unique_dir "$REPO_CLAUDE_CONFIG_DIR"
-append_unique_dir "$REPO_CODEX_CONFIG_DIR"
-collect_parent_config_dirs "$PWD"
+if [[ -n "$EXPLICIT_CLAUDE_CONFIG_DIR" ]]; then
+  append_unique_dir "$EXPLICIT_CLAUDE_CONFIG_DIR"
+fi
 
 for source_dir in "${CONFIG_SOURCE_DIRS[@]}"; do
   case "$(basename "$source_dir")" in
     .claude)
-      overlay_tree "$source_dir" "$MERGED_CLAUDE_CONFIG_DIR"
-      ;;
-    .codex)
-      overlay_tree "$source_dir" "$MERGED_CODEX_CONFIG_DIR"
+      overlay_selected_files "$source_dir" "$MERGED_CLAUDE_CONFIG_DIR" \
+        settings.json \
+        claudeollamamcps.json
       ;;
   esac
 done
 
-if [[ -n "${CLAUDE_CONFIG_DIR:-}" ]]; then
-  overlay_tree "$CLAUDE_CONFIG_DIR" "$MERGED_CLAUDE_CONFIG_DIR"
+if [[ ! -f "$MERGED_CLAUDE_CONFIG_DIR/settings.json" ]]; then
+  mkdir -p "$MERGED_CLAUDE_CONFIG_DIR"
+  cat > "$MERGED_CLAUDE_CONFIG_DIR/settings.json" <<'JSON'
+{
+  "permissions": {
+    "defaultMode": "bypassPermissions"
+  },
+  "theme": "auto",
+  "enabledPlugins": {
+    "superpowers@claude-plugins-official": true
+  },
+  "projects": {
+    "/Users/claw": {
+      "trust_level": "trusted"
+    },
+    "/Users/claw/claudeollama": {
+      "trust_level": "trusted"
+    }
+  },
+  "skipDangerousModePermissionPrompt": true,
+  "autoCompactEnabled": true,
+  "ui": {
+    "inputSuggestions": true
+  }
+}
+JSON
 fi
 
 if [[ -f "$MERGED_CLAUDE_CONFIG_DIR/settings.json" ]]; then
@@ -525,7 +643,37 @@ import sys
 settings_path = pathlib.Path(sys.argv[1])
 settings = json.loads(settings_path.read_text())
 settings.pop("hooks", None)
+settings.pop("startupCommands", None)
+settings["theme"] = "auto"
+
+projects = settings.get("projects")
+if not isinstance(projects, dict):
+    projects = {}
+
+projects["/Users/claw"] = {"trust_level": "trusted"}
+projects["/Users/claw/claudeollama"] = {"trust_level": "trusted"}
+settings["projects"] = projects
+
 settings_path.write_text(json.dumps(settings, indent=2) + "\n")
+PY
+fi
+
+if [[ -f "$MERGED_CLAUDE_CONFIG_DIR/settings.json" ]]; then
+  python3 - <<'PY' "$MERGED_CLAUDE_CONFIG_DIR/settings.json"
+import json
+import pathlib
+import sys
+
+settings_path = pathlib.Path(sys.argv[1])
+settings = json.loads(settings_path.read_text())
+
+enabled_plugins = {
+    "superpowers@claude-plugins-official": True,
+}
+
+if settings.get("enabledPlugins") != enabled_plugins:
+    settings["enabledPlugins"] = enabled_plugins
+    settings_path.write_text(json.dumps(settings, indent=2) + "\n")
 PY
 fi
 
@@ -555,9 +703,6 @@ for source_dir in "${CONFIG_SOURCE_DIRS[@]}"; do
 done
 if [[ -n "${CLAUDE_CONFIG_DIR:-}" ]]; then
   echo "Merged .claude target: $CLAUDE_CONFIG_DIR"
-fi
-if [[ -d "$MERGED_CODEX_CONFIG_DIR" ]]; then
-  echo "Merged .codex target:  $MERGED_CODEX_CONFIG_DIR"
 fi
 if [[ -n "${MCP_CONFIG_PATH:-}" ]]; then
   echo "MCP config override:  $MCP_CONFIG_PATH"
@@ -597,13 +742,12 @@ env -i \
   PATH="$CLEAN_HOME/.local/bin:$PATH" \
   PWD="$PWD" \
   TMPDIR="${TMPDIR:-/tmp}" \
-  CODEX_HOME="$MERGED_CODEX_CONFIG_DIR" \
-  GH_CONFIG_DIR="${GH_CONFIG_DIR:-$HOME/.config/gh}" \
   CLAUDE_CONFIG_DIR="$CLAUDE_CONFIG_DIR" \
   ANTHROPIC_BASE_URL="$FILTER_URL" \
   ANTHROPIC_AUTH_TOKEN="$LITELLM_KEY" \
   ANTHROPIC_MODEL="$MODEL" \
   ANTHROPIC_SMALL_FAST_MODEL="$MODEL" \
+  CLAUDE_CODE_MAX_OUTPUT_TOKENS="${CLAUDE_CODE_MAX_OUTPUT_TOKENS:-256000}" \
   CLAUDECODE= \
   CLAUDE_CODE_CHILD_SESSION= \
   CLAUDE_CODE_SESSION_ID= \
