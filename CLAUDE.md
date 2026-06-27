@@ -86,7 +86,7 @@ The README documents these local dependencies:
 - Before starting a new proxy, the launcher checks whether `FILTER_PORT` is already owned by a listener and reuses it instead of stealing the port from an external service-managed instance.
 - Upstream transport now uses a shared `httpx` client with pooling and bounded retries for transient idempotent-request failures; stability tuning lives in the `FILTER_UPSTREAM_*` and `FILTER_MAX_*` environment variables.
 - Claude runs with `env -i`, so environment propagation is explicit. If a tool stops working, check whether the required variable is being passed through in the `env -i` block.
-- The nested Claude session sets `CLAUDE_CODE_MAX_OUTPUT_TOKENS` by default so long responses do not trip the 256000 output-token ceiling.
+- The nested Claude session enforces a minimum `CLAUDE_CODE_MAX_OUTPUT_TOKENS` floor of 256000 so long responses do not trip the lower inherited ceiling.
 - The merged clean-home `settings.json` has its `hooks` key stripped before launch so home or parent `SessionStart` automations do not run inside the isolated wrapper session.
 - The launcher only forwards explicit script arguments into the nested Claude invocation, which prevents inherited outer-session `--print` mode from breaking the inner interactive launch.
 - The clean HOME only keeps the Superpowers plugin enabled by default.

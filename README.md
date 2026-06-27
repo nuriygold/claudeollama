@@ -224,7 +224,7 @@ Default behavior:
 - The launcher creates a temporary clean `HOME` specifically so it does not reuse an existing Claude login session.
 - The clean-home launch also starts from `env -i`, so inherited wrapper-mode environment from the parent Claude process is not passed through into the nested Claude session.
 - If `REAL_LITELLM_URL` is local loopback, the launcher starts LiteLLM automatically from `config/ollama.config.yaml`.
-- The nested Claude session sets `CLAUDE_CODE_MAX_OUTPUT_TOKENS` by default so long responses do not trip the 256000 output-token ceiling.
+- The nested Claude session enforces a minimum `CLAUDE_CODE_MAX_OUTPUT_TOKENS` floor of 256000 so long responses do not trip the lower inherited ceiling.
 - The clean-home session keeps only the Superpowers plugin enabled by default.
 - Temporary artifacts are written under `/tmp` or `$TMPDIR` unless overridden, and the temp clean home is removed with Python `shutil.rmtree` to avoid noisy macOS `rm` failures on transient npm cache trees.
 - The launcher now waits briefly for `FILTER_PORT` to be released before rebinding, and the embedded TCP server enables address reuse so immediate restarts do not trip over macOS socket teardown timing.
